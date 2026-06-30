@@ -88,14 +88,14 @@ function WeightChart({ chartData, profile, yDomain }) {
   for (let y = Math.ceil(yMin/yStep)*yStep; y <= yMax; y += yStep) yTicks.push(y);
   const xTickCount = Math.max(2, Math.floor(innerW / 75));
   const xTicks = Array.from({length: xTickCount + 1}, (_, i) => Math.round(xMin + (i / xTickCount) * (xMax - xMin)));
-  const targetPts = chartData.filter(d => d.target != null).map(d => `${xs(d.day)},${ys(d.target)}`).join(' ');
+  const targetPts = chartData.filter(d => d.target != null).map(d => xs(d.day)+","+ys(d.target)).join(" ");
   const actualSegs = [];
   let seg = [];
   for (const d of chartData) {
-    if (d.actual != null) { seg.push(`${xs(d.day)},${ys(d.actual)}`); }
-    else if (seg.length) { actualSegs.push(seg.join(' ')); seg = []; }
+    if (d.actual != null) { seg.push(xs(d.day)+","+ys(d.actual)); }
+    else if (seg.length) { actualSegs.push(seg.join(" ")); seg = []; }
   }
-  if (seg.length) actualSegs.push(seg.join(' '));
+  if (seg.length) actualSegs.push(seg.join(" "));
   const dots = chartData.filter(d => d.actual != null);
   return (
     <div ref={containerRef} style={{width:'100%'}}>
@@ -721,4 +721,42 @@ function Operacao90() {
                 {Object.keys(ACTIVITY_LABELS).map(k=><option key={k} value={k}>{ACTIVITY_LABELS[k]}</option>)}
               </select>
             </Field>
-            <div className="row gap2" style={{marginTop:14}
+            <div className="row gap2" style={{marginTop:14}}>
+              <button className="op-btn" style={{flex:1}} onClick={saveSettings}>Salvar</button>
+              <button className="op-btn-ghost" onClick={()=>setShowSettings(false)}>Cancelar</button>
+            </div>
+            <button className="op-btn-ghost" style={{width:'100%', marginTop:10, color:COLORS.warn, borderColor:COLORS.warn}} onClick={resetAll}>Reiniciar todos os dados</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatCard({ label, value }) {
+  return (
+    <div className="op-card" style={{padding:'12px 14px'}}>
+      <div style={{fontSize:11, color:COLORS.textDim, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6}}>{label}</div>
+      <div className="op-mono" style={{fontSize:17, fontWeight:600}}>{value}</div>
+    </div>
+  );
+}
+function PacingRow({ label, pct, color }) {
+  return (
+    <div style={{marginBottom:10}}>
+      <div className="row" style={{justifyContent:'space-between', marginBottom:4}}>
+        <span style={{fontSize:12, color:COLORS.textDim}}>{label}</span>
+        <span className="op-mono" style={{fontSize:12}}>{pct.toFixed(0)}%</span>
+      </div>
+      <div className="op-track"><div className="op-track-fill" style={{width:`${pct}%`, background:color}} /></div>
+    </div>
+  );
+}
+function Field({ label, children }) {
+  return <div style={{marginBottom:12}}><div style={{fontSize:12, color:COLORS.textDim, marginBottom:5}}>{label}</div>{children}</div>;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Operacao90 />);
+</script>
+</body>
+</html>
