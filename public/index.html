@@ -23,11 +23,8 @@
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
-<script src="https://unpkg.com/recharts@2.1.16/umd/Recharts.js"></script>
-
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
-const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } = Recharts;
 
 const STORAGE_KEY = 'operacao90-state';
 
@@ -65,6 +62,56 @@ const DEFAULT_WEEKLY_PLAN = {
   sab: 'Caminhada ou cardio leve 20-30min', dom: 'Descanso',
 };
 const DEFAULT_ROUTINE = '';
+
+function WeightChart({ chartData, profile, yDomain }) {
+  const containerRef = useRef(null);
+  const [width, setWidth] = useState(320);
+  useEffect(() => {
+    if (!containerRef.current) return;
+    setWidth(containerRef.current.getBoundingClientRect().width || 320);
+    const ro = new ResizeObserver(e => setWidth(e[0].contentRect.width));
+    ro.observe(containerRef.current);
+    return () => ro.disconnect();
+  }, []);
+  const H = 220, PAD = { top: 10, right: 8, left: 36, bottom: 28 };
+  const innerW = width - PAD.left - PAD.right;
+  const innerH = H - PAD.top - PAD.bottom;
+  if (!chartData || chartData.length < 2) return <div ref={containerRef} style={{width:'100%',height:H}} />;
+  const [yMin, yMax] = yDomain;
+  const xVals = chartData.map(d => d.day);
+  const xMin = Math.min(...xVals), xMax = Math.max(...xVals);
+  const xs = d => PAD.left + ((d - xMin) / (xMax - xMin || 1)) * innerW;
+  const ys = v => PAD.top + ((yMax - v) / (yMax - yMin || 1)) * innerH;
+  const yRange = yMax - yMin;
+  const yStep = yRange <= 5 ? 1 : yRange <= 15 ? 2 : 5;
+  const yTicks = [];
+  for (let y = Math.ceil(yMin/yStep)*yStep; y <= yMax; y += yStep) yTicks.push(y);
+  const xTickCount = Math.max(2, Math.floor(innerW / 75));
+  const xTicks = Array.from({length: xTickCount + 1}, (_, i) => Math.round(xMin + (i / xTickCount) * (xMax - xMin)));
+  const targetPts = chartData.filter(d => d.target != null).map(d => `${xs(d.day)},${ys(d.target)}`).join(' ');
+  const actualSegs = [];
+  let seg = [];
+  for (const d of chartData) {
+    if (d.actual != null) { seg.push(`${xs(d.day)},${ys(d.actual)}`); }
+    else if (seg.length) { actualSegs.push(seg.join(' ')); seg = []; }
+  }
+  if (seg.length) actualSegs.push(seg.join(' '));
+  const dots = chartData.filter(d => d.actual != null);
+  return (
+    <div ref={containerRef} style={{width:'100%'}}>
+      <svg width={width} height={H}>
+        {yTicks.map(y => <line key={y} x1={PAD.left} x2={width-PAD.right} y1={ys(y)} y2={ys(y)} stroke={COLORS.borderSoft} strokeWidth={1} />)}
+        <line x1={PAD.left} x2={width-PAD.right} y1={ys(profile.goalWeight)} y2={ys(profile.goalWeight)} stroke={COLORS.good} strokeDasharray="3 3" strokeOpacity={0.6} strokeWidth={1.5} />
+        {targetPts && <polyline points={targetPts} fill="none" stroke={COLORS.target} strokeDasharray="5 4" strokeWidth={1.5} />}
+        {actualSegs.map((pts,i) => <polyline key={i} points={pts} fill="none" stroke={COLORS.accent} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />)}
+        {dots.map((d,i) => <circle key={i} cx={xs(d.day)} cy={ys(d.actual)} r={3} fill={COLORS.accent} />)}
+        <line x1={PAD.left} x2={width-PAD.right} y1={H-PAD.bottom} y2={H-PAD.bottom} stroke={COLORS.border} strokeWidth={1} />
+        {xTicks.map(d => <text key={d} x={xs(d)} y={H-PAD.bottom+14} textAnchor="middle" fontSize={11} fill={COLORS.textFaint}>{fmtShortPT(addDaysISO(profile.startDate,d))}</text>)}
+        {yTicks.map(y => <text key={y} x={PAD.left-4} y={ys(y)+4} textAnchor="end" fontSize={11} fill={COLORS.textFaint}>{y}</text>)}
+      </svg>
+    </div>
+  );
+}
 
 function computePaceKgPerWeek(entries) {
   if (entries.length < 2) return null;
@@ -474,17 +521,7 @@ function Operacao90() {
 
           <div className="op-card" style={{padding:16, marginBottom:16}}>
             <span className="op-label">Trajetória</span>
-            <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={chartData} margin={{top:10,right:8,left:-18,bottom:0}}>
-                <CartesianGrid stroke={COLORS.borderSoft} vertical={false} />
-                <XAxis dataKey="day" tickFormatter={d=>fmtShortPT(addDaysISO(profile.startDate,d))} stroke={COLORS.textFaint} tick={{fontSize:11,fill:COLORS.textFaint}} tickLine={false} axisLine={{stroke:COLORS.border}} minTickGap={30} />
-                <YAxis domain={yDomain} stroke={COLORS.textFaint} tick={{fontSize:11,fill:COLORS.textFaint}} tickLine={false} axisLine={false} width={36} />
-                <ReferenceLine y={profile.goalWeight} stroke={COLORS.good} strokeDasharray="3 3" strokeOpacity={0.5} />
-                <Tooltip contentStyle={{background:COLORS.surface2, border:`1px solid ${COLORS.border}`, borderRadius:8, fontSize:12}} labelFormatter={d=>fmtShortPT(addDaysISO(profile.startDate,d))} formatter={(v,n)=>[v==null?'—':`${fmtKg(v)} kg`, n==='target'?'meta ideal':'peso']} />
-                <Line type="monotone" dataKey="target" stroke={COLORS.target} strokeDasharray="5 4" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-                <Line type="monotone" dataKey="actual" stroke={COLORS.accent} strokeWidth={2.5} dot={{r:3, fill:COLORS.accent, strokeWidth:0}} connectNulls isAnimationActive={false} />
-              </LineChart>
-            </ResponsiveContainer>
+            <WeightChart chartData={chartData} profile={profile} yDomain={yDomain} />
           </div>
 
           <div className="grid2">
@@ -684,42 +721,4 @@ function Operacao90() {
                 {Object.keys(ACTIVITY_LABELS).map(k=><option key={k} value={k}>{ACTIVITY_LABELS[k]}</option>)}
               </select>
             </Field>
-            <div className="row gap2" style={{marginTop:14}}>
-              <button className="op-btn" style={{flex:1}} onClick={saveSettings}>Salvar</button>
-              <button className="op-btn-ghost" onClick={()=>setShowSettings(false)}>Cancelar</button>
-            </div>
-            <button className="op-btn-ghost" style={{width:'100%', marginTop:10, color:COLORS.warn, borderColor:COLORS.warn}} onClick={resetAll}>Reiniciar todos os dados</button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function StatCard({ label, value }) {
-  return (
-    <div className="op-card" style={{padding:'12px 14px'}}>
-      <div style={{fontSize:11, color:COLORS.textDim, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6}}>{label}</div>
-      <div className="op-mono" style={{fontSize:17, fontWeight:600}}>{value}</div>
-    </div>
-  );
-}
-function PacingRow({ label, pct, color }) {
-  return (
-    <div style={{marginBottom:10}}>
-      <div className="row" style={{justifyContent:'space-between', marginBottom:4}}>
-        <span style={{fontSize:12, color:COLORS.textDim}}>{label}</span>
-        <span className="op-mono" style={{fontSize:12}}>{pct.toFixed(0)}%</span>
-      </div>
-      <div className="op-track"><div className="op-track-fill" style={{width:`${pct}%`, background:color}} /></div>
-    </div>
-  );
-}
-function Field({ label, children }) {
-  return <div style={{marginBottom:12}}><div style={{fontSize:12, color:COLORS.textDim, marginBottom:5}}>{label}</div>{children}</div>;
-}
-
-ReactDOM.createRoot(document.getElementById('root')).render(<Operacao90 />);
-</script>
-</body>
-<
+            <div className="row gap2" style={{marginTop:14}
