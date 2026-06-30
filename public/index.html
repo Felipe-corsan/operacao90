@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>Operação 90</title>
+<link rel="icon" href="data:,">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; background:#15171A; }
+  body { font-family:'Inter',system-ui,sans-serif; }
+  #root { max-width: 720px; margin: 0 auto; padding: 12px; }
+  ::-webkit-scrollbar { width:6px; height:6px; }
+  ::-webkit-scrollbar-thumb { background:#2E333B; border-radius:4px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/recharts@2.12.0/umd/Recharts.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
+const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } = Recharts;
+
+const STORAGE_KEY = 'operacao90-state';
+
+const COLORS = {
+  bg: '#15171A', surface: '#1C1F24', surface2: '#23272D', border: '#2E333B', borderSoft: '#262A30',
+  text: '#ECEAE6', textDim: '#9AA0A8', textFaint: '#6B7178', accent: '#E8762C', accentSoft: 'rgba(232,118,44,0.14)',
+  target: '#5C8AA8', good: '#74A57F', goodSoft: 'rgba(116,165,127,0.14)', warn: '#C1666B', warnSoft: 'rgba(193,102,107,0.14)',
+};
+
+const MONTHS_PT = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+const WEEKDAYS = [
+  { key:'seg', label:'Segunda' }, { key:'ter', label:'Terça' }, { key:'qua', label:'Quarta' },
+  { key:'qui', label:'Quinta' }, { key:'sex', label:'Sexta' }, { key:'sab', label:'Sábado' }, { key:'dom', label:'Domingo' },
+];
+const ACTIVITY_FACTORS = { leve: 28, moderado: 33, intenso: 38 };
+const ACTIVITY_LABELS = { leve: 'Leve', moderado: 'Moderado', intenso: 'Intenso' };
+
+function localISODate(date = new Date()) {
+  const off = date.getTimezoneOffset();
+  const local = new Date(date.getTime() - off * 60000);
+  return local.toISOString().slice(0, 10);
+}
+function parseISO(s) { return new Date(s + 'T00:00:00'); }
+function daysBetween(a, b) { return Math.round((parseISO(b) - parseISO(a)) / 86400000); }
+function addDaysISO(s, n) { const d = parseISO(s); d.setDate(d.getDate() + n); return localISODate(d); }
+function fmtShortPT(s) { const d = parseISO(s); return `${d.getDate()} ${MONTHS_PT[d.getMonth()]}`; }
+function fmtKg(n, dec=1) { if (n==null||Number.isNaN(n)) return '—'; return n.toFixed(dec).replace('.', ','); }
+function fmtNum(n, dec=0) { if (n==null||Number.isNaN(n)) return '—'; return n.toFixed(dec); }
+function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+
+const DEFAULT_PROFILE = { startWeight: 107, goalWeight: 90, startDate: localISODate(), totalDays: 185, activityLevel: 'moderado' };
+const DEFAULT_WEEKLY_PLAN = {
+  seg: 'Peito e tríceps (força)', ter: 'Costas e bíceps (força)', qua: 'Pernas (força)',
+  qui: 'Ombro (força) + cardio 15-20min', sex: 'Cardio 30min + abdômen',
+  sab: 'Caminhada ou cardio leve 20-30min', dom: 'Descanso',
+};
+const DEFAULT_ROUTINE = '';
+
+function computePaceKgPerWeek(entries) {
+  if (entries.length < 2) return null;
+  const sorted = [...entries].sort((a,b)=>a.date.localeCompare(b.date));
+  const last = sorted[sorted.length-1];
+  const lastTime = parseISO(last.date).getTime();
+  const windowed = sorted.filter(e => (lastTime - parseISO(e.date).getTime())/86400000 <= 21);
+  const pts = windowed.length >= 2 ? windowed : sorted.slice(-2);
+  if (pts.length < 2) return null;
+  const x0 = parseISO(pts[0].date).getTime();
+  const xs = pts.map(p => (parseISO(p.date).getTime()-x0)/86400000);
+  const ys = pts.map(p => p.weight);
+  const n = xs.length;
+  const sumX = xs.reduce((a,b)=>a+b,0), sumY = ys.reduce((a,b)=>a+b,0);
+  const sumXY = xs.reduce((a,x,i)=>a+x*ys[i],0), sumXX = xs.reduce((a,x)=>a+x*x,0);
+  const denom = n*sumXX - sumX*sumX;
+  if (denom === 0) return null;
+  const slope = (n*sumXY - sumX*sumY)/denom;
+  return -slope*7;
+}
+
+function computeNutritionTargets(latestWeight, requiredWeeklyPaceKg, activityLevel) {
+  const factor = ACTIVITY_FACTORS[activityLevel] || ACTIVITY_FACTORS.moderado;
+  const maintenance = latestWeight * factor;
+  const paceForDeficit = Math.max(requiredWeeklyPaceKg, 0.1);
+  const dailyDeficit = (paceForDeficit * 7700) / 7;
+  const rawTarget = maintenance - dailyDeficit;
+  const floor = 1500;
+  const target = Math.max(rawTarget, floor);
+  const protein = latestWeight * 2;
+  const fat = latestWeight * 0.8;
+  const proteinKcal = protein*4, fatKcal = fat*9;
+  const carbsKcal = Math.max(target - proteinKcal - fatKcal, 0);
+  return { maintenance, dailyDeficit, target, wasCapped: rawTarget < floor, protein, fat, carbs: carbsKcal/4 };
+}
+
+function groupByDateDesc(items) {
+  const map = new Map();
+  items.forEach(it => { if (!map.has(it.date)) map.set(it.date, []); map.get(it.date).push(it); });
+  return Array.from(map.entries()).sort((a,b)=>b[0].localeCompare(a[0]));
+}
+
+async function callClaude({ system, content, maxTokens = 800 }) {
+  const res = await fetch('/api/claude', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ system, content, maxTokens }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'request failed');
+  return data.text || '';
+}
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (e) { return null; }
+}
+function saveState(state) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); return true; }
+  catch (e) { return false; }
+}
+
+function Operacao90() {
+  const initial = loadState();
+  const [profile, setProfile] = useState(initial?.profile ? { ...DEFAULT_PROFILE, ...initial.profile } : DEFAULT_PROFILE);
+  const [entries, setEntries] = useState(initial?.entries || []);
+  const [meals, setMeals] = useState(initial?.meals || []);
+  const [mealPlan, setMealPlan] = useState(initial?.mealPlan || null);
+  const [weeklyPlan, setWeeklyPlan] = useState(initial?.weeklyPlan ? { ...DEFAULT_WEEKLY_PLAN, ...initial.weeklyPlan } : DEFAULT_WEEKLY_PLAN);
+  const [workoutLogs, setWorkoutLogs] = useState(initial?.workoutLogs || []);
+  const [coachMessage, setCoachMessage] = useState(initial?.coachMessage || '');
+  const [coachAt, setCoachAt] = useState(initial?.coachAt || null);
+  const [routineProfile, setRoutineProfile] = useState(typeof initial?.routineProfile === 'string' ? initial.routineProfile : DEFAULT_ROUTINE);
+  const [routineDraft, setRoutineDraft] = useState(routineProfile);
+  const [editingRoutine, setEditingRoutine] = useState(!routineProfile);
+  const [routineOpen, setRoutineOpen] = useState(!routineProfile);
+
+  const [tab, setTab] = useState('peso');
+  const [saveError, setSaveError] = useState('');
+  const firstLoad = useRef(true);
+
+  const [newWeight, setNewWeight] = useState('');
+  const [newNote, setNewNote] = useState('');
+  const [newDate, setNewDate] = useState(localISODate());
+
+  const [showSettings, setShowSettings] = useState(false);
+  const [draftProfile, setDraftProfile] = useState(profile);
+
+  const [foodDate, setFoodDate] = useState(localISODate());
+  const [foodDesc, setFoodDesc] = useState('');
+  const [foodCal, setFoodCal] = useState('');
+  const [foodProt, setFoodProt] = useState('');
+  const [foodCarb, setFoodCarb] = useState('');
+  const [foodFat, setFoodFat] = useState('');
+  const [estimating, setEstimating] = useState(false);
+  const [estimateError, setEstimateError] = useState('');
+  const [planContext, setPlanContext] = useState('');
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planError, setPlanError] = useState('');
+
+  const [woDate, setWoDate] = useState(localISODate());
+  const [woTipo, setWoTipo] = useState('Força');
+  const [woDur, setWoDur] = useState('');
+  const [woIntensidade, setWoIntensidade] = useState('Moderada');
+  const [woNota, setWoNota] = useState('');
+  const [woPlanContext, setWoPlanContext] = useState('');
+  const [woPlanLoading, setWoPlanLoading] = useState(false);
+  const [woPlanError, setWoPlanError] = useState('');
+
+  const [coachQuestion, setCoachQuestion] = useState('');
+  const [coachLoading, setCoachLoading] = useState(false);
+  const [coachError, setCoachError] = useState('');
+
+  useEffect(() => {
+    if (firstLoad.current) { firstLoad.current = false; return; }
+    const ok = saveState({ profile, entries, meals, mealPlan, weeklyPlan, workoutLogs, coachMessage, coachAt, routineProfile });
+    setSaveError(ok ? '' : 'Não consegui salvar agora (armazenamento local cheio ou bloqueado).');
+  }, [profile, entries, meals, mealPlan, weeklyPlan, workoutLogs, coachMessage, coachAt, routineProfile]);
+
+  const deadlineISO = useMemo(() => addDaysISO(profile.startDate, profile.totalDays), [profile.startDate, profile.totalDays]);
+  const sortedEntries = useMemo(() => [...entries].sort((a,b)=>a.date.localeCompare(b.date)), [entries]);
+
+  const stats = useMemo(() => {
+    const today = localISODate();
+    const totalToLose = profile.startWeight - profile.goalWeight;
+    const elapsed = clamp(daysBetween(profile.startDate, today), 0, profile.totalDays);
+    const daysLeft = profile.totalDays - elapsed;
+    const latestWeight = sortedEntries.length ? sortedEntries[sortedEntries.length-1].weight : profile.startWeight;
+    const idealTargetToday = profile.startWeight - (totalToLose*elapsed)/profile.totalDays;
+    const diffVsIdeal = latestWeight - idealTargetToday;
+    let status = 'on-track';
+    if (diffVsIdeal <= -0.3) status='ahead'; else if (diffVsIdeal >= 0.3) status='behind';
+    const remainingToLose = latestWeight - profile.goalWeight;
+    const goalReached = remainingToLose <= 0;
+    const requiredWeeklyPace = daysLeft > 0 ? remainingToLose/(daysLeft/7) : 0;
+    const currentPace = computePaceKgPerWeek(sortedEntries);
+    let projectedDate = null;
+    if (!goalReached && currentPace !== null && currentPace > 0.05) {
+      projectedDate = addDaysISO(today, Math.ceil(remainingToLose/(currentPace/7)));
+    }
+    const lostSoFar = profile.startWeight - latestWeight;
+    const pctDaysUsed = clamp((elapsed/profile.totalDays)*100, 0, 100);
+    const pctDelivered = totalToLose > 0 ? clamp((lostSoFar/totalToLose)*100, 0, 100) : 0;
+    return { today, totalToLose, elapsed, daysLeft, latestWeight, idealTargetToday, diffVsIdeal, status,
+      remainingToLose, goalReached, requiredWeeklyPace, currentPace, projectedDate, lostSoFar, pctDaysUsed, pctDelivered };
+  }, [profile, sortedEntries]);
+
+  const nutrition = useMemo(() => computeNutritionTargets(stats.latestWeight, Math.max(stats.requiredWeeklyPace, 0.3), profile.activityLevel),
+    [stats.latestWeight, stats.requiredWeeklyPace, profile.activityLevel]);
+
+  const chartData = useMemo(() => {
+    const points = new Map();
+    const addPoint = (dateISO) => {
+      const day = clamp(daysBetween(profile.startDate, dateISO), 0, profile.totalDays);
+      if (!points.has(day)) {
+        const target = profile.startWeight - (stats.totalToLose*day)/profile.totalDays;
+        points.set(day, { day, dateISO, target, actual: null });
+      }
+      return points.get(day);
+    };
+    addPoint(profile.startDate); addPoint(deadlineISO);
+    sortedEntries.forEach(e => { addPoint(e.date).actual = e.weight; });
+    if (!sortedEntries.length) points.get(0).actual = profile.startWeight;
+    return Array.from(points.values()).sort((a,b)=>a.day-b.day);
+  }, [profile, deadlineISO, sortedEntries, stats.totalToLose]);
+
+  const yDomain = useMemo(() => {
+    const allW = [profile.startWeight, profile.goalWeight, ...sortedEntries.map(e=>e.weight)];
+    return [Math.floor(Math.min(...allW)-2), Math.ceil(Math.max(...allW)+2)];
+  }, [profile, sortedEntries]);
+
+  const milestones = useMemo(() => {
+    const arr = [];
+    for (let m=5; m<stats.totalToLose; m+=5) arr.push(m);
+    const total = Math.round(stats.totalToLose);
+    if (arr[arr.length-1] !== total) arr.push(total);
+    return arr;
+  }, [stats.totalToLose]);
+
+  const todayFoodTotal = useMemo(() => meals.filter(m=>m.date===stats.today).reduce((s,m)=>s+(m.calories||0),0), [meals, stats.today]);
+  const last7Meals = useMemo(() => { const cutoff = addDaysISO(stats.today,-6); return meals.filter(m=>m.date>=cutoff); }, [meals, stats.today]);
+  const avgCal7d = useMemo(() => {
+    const byDate = groupByDateDesc(last7Meals);
+    if (!byDate.length) return null;
+    const totals = byDate.map(([,items]) => items.reduce((s,i)=>s+(i.calories||0),0));
+    return totals.reduce((a,b)=>a+b,0)/totals.length;
+  }, [last7Meals]);
+
+  const last7Workouts = useMemo(() => { const cutoff = addDaysISO(stats.today,-6); return workoutLogs.filter(w=>w.date>=cutoff); }, [workoutLogs, stats.today]);
+  const trainedDaysLast7 = useMemo(() => new Set(last7Workouts.filter(w=>w.tipo!=='Descanso').map(w=>w.date)).size, [last7Workouts]);
+  const streak = useMemo(() => {
+    const trainedDates = new Set(workoutLogs.filter(w=>w.tipo!=='Descanso').map(w=>w.date));
+    let s=0, d=stats.today;
+    while (trainedDates.has(d)) { s++; d = addDaysISO(d,-1); }
+    return s;
+  }, [workoutLogs, stats.today]);
+
+  function handleAddEntry() {
+    const w = parseFloat(newWeight.replace(',', '.'));
+    if (!w || w<=0 || w>400) return;
+    setEntries([...entries.filter(e=>e.date!==newDate), { id:`${newDate}-${Date.now()}`, date:newDate, weight:w, note:newNote.trim() }]);
+    setNewWeight(''); setNewNote('');
+  }
+  function handleDeleteEntry(id) { setEntries(entries.filter(e=>e.id!==id)); }
+
+  function openSettings() { setDraftProfile(profile); setShowSettings(true); }
+  function saveSettings() {
+    const sw = parseFloat(String(draftProfile.startWeight).replace(',', '.'));
+    const gw = parseFloat(String(draftProfile.goalWeight).replace(',', '.'));
+    const td = parseInt(draftProfile.totalDays, 10);
+    if (!sw || !gw || !td || sw<=gw || td<=0) return;
+    setProfile({ startWeight: sw, goalWeight: gw, startDate: draftProfile.startDate, totalDays: td, activityLevel: draftProfile.activityLevel || 'moderado' });
+    setShowSettings(false);
+  }
+  function resetAll() {
+    if (!window.confirm('Isso vai apagar peso, refeições, treinos e o histórico da IA. Continuar?')) return;
+    setEntries([]); setMeals([]); setMealPlan(null); setWeeklyPlan(DEFAULT_WEEKLY_PLAN);
+    setWorkoutLogs([]); setCoachMessage(''); setCoachAt(null); setShowSettings(false);
+  }
+  function saveRoutine() { setRoutineProfile(routineDraft.trim()); setEditingRoutine(false); }
+  function cancelRoutineEdit() { setRoutineDraft(routineProfile); setEditingRoutine(false); }
+
+  async function handleEstimate() {
+    if (!foodDesc.trim()) return;
+    setEstimating(true); setEstimateError('');
+    try {
+      const sys = 'Você estima valores nutricionais aproximados de alimentos descritos em português do Brasil, considerando porções caseiras comuns. Responda APENAS com um JSON válido, sem markdown, sem texto antes ou depois, no formato exato: {"calorias":NUMERO,"proteina":NUMERO,"carboidrato":NUMERO,"gordura":NUMERO}. calorias em kcal, os demais em gramas.';
+      const text = await callClaude({ system: sys, content: foodDesc.trim(), maxTokens: 200 });
+      const parsed = JSON.parse(text.replace(/```json|```/g, '').trim());
+      setFoodCal(String(Math.round(parsed.calorias||0))); setFoodProt(String(Math.round(parsed.proteina||0)));
+      setFoodCarb(String(Math.round(parsed.carboidrato||0))); setFoodFat(String(Math.round(parsed.gordura||0)));
+    } catch (e) { setEstimateError('Não consegui estimar agora. Pode digitar manualmente.'); }
+    finally { setEstimating(false); }
+  }
+  function handleAddMeal() {
+    const cal = parseFloat(String(foodCal).replace(',', '.'));
+    if (!foodDesc.trim() || !cal) return;
+    setMeals([...meals, { id:`${foodDate}-${Date.now()}`, date:foodDate, description:foodDesc.trim(), calories:cal,
+      protein: parseFloat(String(foodProt).replace(',', '.'))||0, carbs: parseFloat(String(foodCarb).replace(',', '.'))||0, fat: parseFloat(String(foodFat).replace(',', '.'))||0 }]);
+    setFoodDesc(''); setFoodCal(''); setFoodProt(''); setFoodCarb(''); setFoodFat('');
+  }
+  function handleDeleteMeal(id) { setMeals(meals.filter(m=>m.id!==id)); }
+
+  async function handleGenerateMealPlan() {
+    setPlanLoading(true); setPlanError('');
+    try {
+      const sys = 'Você é um nutricionista pragmático que monta cardápios brasileiros simples e realistas, levando em conta os horários e a rotina real da pessoa. Gere um exemplo de cardápio para 1 dia (café da manhã, almoço, lanche da tarde, jantar) batendo aproximadamente as metas informadas, encaixando os horários certos, usando comida brasileira comum. Organize por refeição em linhas curtas, sem markdown pesado, no máximo 230 palavras.';
+      const payload = { metaCalorica: Math.round(nutrition.target), proteinaG: Math.round(nutrition.protein), carboidratoG: Math.round(nutrition.carbs), gorduraG: Math.round(nutrition.fat) };
+      const content = `Metas do dia (JSON): ${JSON.stringify(payload)}. Rotina da pessoa: ${routineProfile || 'nenhuma informada'}. Preferências adicionais: ${planContext.trim() || 'nenhuma'}.`;
+      const text = await callClaude({ system: sys, content, maxTokens: 700 });
+      setMealPlan({ text, at: new Date().toISOString() });
+    } catch (e) { setPlanError('Não consegui gerar o cardápio agora.'); }
+    finally { setPlanLoading(false); }
+  }
+
+  function handleAddWorkout() {
+    setWorkoutLogs([...workoutLogs, { id:`${woDate}-${Date.now()}`, date:woDate, tipo:woTipo, duracao: parseInt(woDur,10)||null, intensidade:woIntensidade, nota:woNota.trim() }]);
+    setWoDur(''); setWoNota('');
+  }
+  function handleDeleteWorkout(id) { setWorkoutLogs(workoutLogs.filter(w=>w.id!==id)); }
+  function updateWeeklyPlanDay(key, value) { setWeeklyPlan({ ...weeklyPlan, [key]: value }); }
+
+  async function handleGenerateWeeklyPlan() {
+    setWoPlanLoading(true); setWoPlanError('');
+    try {
+      const sys = 'Você é um treinador pragmático. Gere uma divisão de treino para a semana, equilibrando força e cardio para perda de peso preservando músculo, respeitando a rotina real da pessoa, com pelo menos 1 dia de descanso. Responda APENAS com um JSON válido no formato exato: {"seg":"...","ter":"...","qua":"...","qui":"...","sex":"...","sab":"...","dom":"..."}, cada valor com no máximo 8 palavras, em português, sem markdown.';
+      const content = `Objetivo: perder peso (${fmtKg(stats.totalToLose,0)}kg) preservando massa muscular. Rotina: ${routineProfile || 'nenhuma informada'}. Contexto adicional: ${woPlanContext.trim() || 'nenhum'}.`;
+      const text = await callClaude({ system: sys, content, maxTokens: 300 });
+      setWeeklyPlan({ ...DEFAULT_WEEKLY_PLAN, ...JSON.parse(text.replace(/```json|```/g, '').trim()) });
+    } catch (e) { setWoPlanError('Não consegui gerar o plano agora.'); }
+    finally { setWoPlanLoading(false); }
+  }
+
+  async function askCoach(question) {
+    setCoachLoading(true); setCoachError('');
+    try {
+      const recentWeights = sortedEntries.slice(-10).map(e=>({ data:e.date, peso:e.weight, nota:e.note||undefined }));
+      const recentMeals = groupByDateDesc(meals).slice(0,7).map(([date,items])=>({ data:date, totalKcal: Math.round(items.reduce((s,i)=>s+i.calories,0)), itens: items.map(i=>i.description) }));
+      const recentWorkouts = groupByDateDesc(workoutLogs).slice(0,7).map(([date,items])=>({ data:date, treinos: items.map(w=>`${w.tipo}${w.duracao?' '+w.duracao+'min':''} (${w.intensidade})`) }));
+      const payload = {
+        pesoInicial: profile.startWeight, pesoMeta: profile.goalWeight, dataInicio: profile.startDate, prazoDias: profile.totalDays,
+        dataLimite: deadlineISO, diasDecorridos: stats.elapsed, diasRestantes: stats.daysLeft, pesoAtual: stats.latestWeight,
+        faltamKg: Number(stats.remainingToLose.toFixed(1)), ritmoNecessarioKgPorSemana: Number(stats.requiredWeeklyPace.toFixed(2)),
+        ritmoAtualKgPorSemana: stats.currentPace===null?'dados insuficientes':Number(stats.currentPace.toFixed(2)),
+        statusVsTrajetoriaIdeal: stats.status, metaJaAtingida: stats.goalReached,
+        metaCaloricaDiaria: Math.round(nutrition.target), caloriasHoje: Math.round(todayFoodTotal),
+        mediaCaloriasUltimos7dias: avgCal7d===null?'sem dados':Math.round(avgCal7d),
+        diasTreinadosUltimos7: trainedDaysLast7, streakAtualDeTreinoEmDias: streak,
+        planoSemanalDeTreino: weeklyPlan, ultimosRegistrosDePeso: recentWeights,
+        ultimasRefeicoesPorDia: recentMeals, ultimosTreinosPorDia: recentWorkouts, rotinaDaPessoa: routineProfile || 'não informada',
+      };
+      const sys = 'Você é um coach de composição corporal direto, objetivo e baseado em dados, falando em português do Brasil. Você recebe dados de peso, alimentação, treino e a rotina diária real da pessoa. Dê um diagnóstico curto e honesto juntando essas frentes, e depois 2 a 4 ações práticas para os próximos 7 dias, encaixadas na rotina real dela. Sem rodeios, sem markdown pesado, frases curtas, no máximo 200 palavras.';
+      const content = `Dados atuais (JSON):\n${JSON.stringify(payload)}\n\nPergunta: ${question || 'Analise meu progresso (peso, comida e treino) e me dê orientação prática para os próximos 7 dias.'}`;
+      const text = await callClaude({ system: sys, content, maxTokens: 1000 });
+      setCoachMessage(text || 'Sem resposta da análise.'); setCoachAt(new Date().toISOString()); setCoachQuestion('');
+    } catch (e) { setCoachError('Não consegui falar com a IA agora.'); }
+    finally { setCoachLoading(false); }
+  }
+
+  const statusColor = { ahead: COLORS.good, 'on-track': COLORS.accent, behind: COLORS.warn }[stats.status];
+  const statusLabel = { ahead: 'Adiantado', 'on-track': 'No ritmo', behind: 'Atrasado' }[stats.status];
+  const statusBg = { ahead: COLORS.goodSoft, 'on-track': COLORS.accentSoft, behind: COLORS.warnSoft }[stats.status];
+
+  const TABS = [
+    { id:'peso', label:'Peso' }, { id:'comida', label:'Alimentação' },
+    { id:'treino', label:'Treino' }, { id:'coach', label:'IA Coach' },
+  ];
+
+  return (
+    <div className="op-root">
+      <style>{`
+        .op-root { background:${COLORS.bg}; color:${COLORS.text}; font-family:'Inter',system-ui,sans-serif; border-radius:16px; padding: 16px; }
+        .op-display { font-family:'Oswald',sans-serif; letter-spacing: 0.02em; }
+        .op-mono { font-family:'IBM Plex Mono',monospace; }
+        .op-label { font-size:12px; letter-spacing:0.1em; color:${COLORS.textDim}; text-transform:uppercase; font-family:'Oswald',sans-serif; }
+        .op-card { background:${COLORS.surface}; border:1px solid ${COLORS.border}; border-radius:12px; }
+        .op-card2 { background:${COLORS.surface2}; border:1px solid ${COLORS.borderSoft}; border-radius:10px; }
+        .op-input, .op-select { background:${COLORS.surface2}; border:1px solid ${COLORS.border}; color:${COLORS.text}; border-radius:8px; padding:8px 10px; font-size:14px; outline:none; width:100%; }
+        .op-input:focus, .op-select:focus { border-color:${COLORS.accent}; }
+        .op-btn { background:${COLORS.accent}; color:#1A1100; font-weight:600; border-radius:8px; padding:9px 16px; font-size:14px; border:none; cursor:pointer; white-space:nowrap; }
+        .op-btn:disabled { opacity:0.5; cursor:not-allowed; }
+        .op-btn-2 { background:${COLORS.surface2}; color:${COLORS.text}; font-weight:500; border:1px solid ${COLORS.border}; border-radius:8px; padding:9px 16px; font-size:13.5px; cursor:pointer; white-space:nowrap; }
+        .op-btn-2:disabled { opacity:0.5; cursor:not-allowed; }
+        .op-btn-ghost { background:transparent; color:${COLORS.textDim}; border:1px solid ${COLORS.border}; border-radius:8px; padding:8px 14px; font-size:13px; cursor:pointer; }
+        .op-icon-btn { background:transparent; border:1px solid ${COLORS.border}; border-radius:8px; padding:7px; color:${COLORS.textDim}; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+        .op-track { height:8px; border-radius:5px; background:${COLORS.surface2}; overflow:hidden; position:relative; }
+        .op-track-fill { height:100%; border-radius:5px; transition:width .4s ease; }
+        .op-tab { padding:8px 13px; border-radius:9px; font-size:13.5px; font-weight:500; color:${COLORS.textDim}; border:1px solid transparent; cursor:pointer; white-space:nowrap; background:none; }
+        .op-tab.active { background:${COLORS.surface}; border-color:${COLORS.border}; color:${COLORS.text}; }
+        .row { display:flex; }
+        .col { display:flex; flex-direction:column; }
+        .gap2 { gap:8px; } .gap3 { gap:12px; } .wrap { flex-wrap:wrap; }
+        .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+        .grid4 { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
+        @media(min-width:560px){ .grid4{ grid-template-columns:repeat(4,1fr);} }
+      `}</style>
+
+      <div className="row wrap gap3" style={{justifyContent:'space-between', alignItems:'flex-start', marginBottom:16}}>
+        <div>
+          <div className="op-label">Operação</div>
+          <h1 className="op-display" style={{fontSize:26, fontWeight:700, margin:'2px 0'}}>{fmtKg(profile.startWeight,0)} → {fmtKg(profile.goalWeight,0)} kg</h1>
+          <div className="op-mono" style={{fontSize:12, color:COLORS.textDim}}>Dia {Math.max(1,stats.elapsed)} de {profile.totalDays} · prazo {fmtShortPT(deadlineISO)}</div>
+        </div>
+        <div className="row gap2" style={{alignItems:'center'}}>
+          <div className="op-mono" style={{fontSize:12, fontWeight:600, padding:'6px 12px', borderRadius:999, background:statusBg, color:statusColor}}>
+            {stats.goalReached ? 'Meta batida' : statusLabel}
+          </div>
+          <button className="op-icon-btn" onClick={openSettings}>⚙</button>
+        </div>
+      </div>
+
+      {saveError && <div style={{fontSize:12, color:COLORS.warn, marginBottom:10}}>{saveError}</div>}
+
+      <div className="op-card" style={{padding:14, marginBottom:16}}>
+        <div className="row" style={{justifyContent:'space-between', cursor:'pointer'}} onClick={()=>!editingRoutine && setRoutineOpen(!routineOpen)}>
+          <div className="op-label">Seu perfil de rotina <span style={{fontSize:11, color:COLORS.textFaint, textTransform:'none'}}>· usado pela IA</span></div>
+          <span style={{fontSize:12, color:COLORS.textDim}}>{routineOpen ? 'recolher' : 'ver / editar'}</span>
+        </div>
+        {routineOpen && (
+          editingRoutine ? (
+            <div style={{marginTop:10}}>
+              <textarea className="op-input" style={{minHeight:110, resize:'vertical'}} value={routineDraft} onChange={e=>setRoutineDraft(e.target.value)}
+                placeholder="Conta sua rotina: horário que acorda, trabalho, refeições, treino, fim de semana, sono…" />
+              <div className="row gap2" style={{marginTop:8}}>
+                <button className="op-btn" onClick={saveRoutine}>Salvar</button>
+                <button className="op-btn-ghost" onClick={cancelRoutineEdit}>Cancelar</button>
+              </div>
+            </div>
+          ) : (
+            <div style={{marginTop:10}}>
+              <div style={{fontSize:13, color:COLORS.textDim, whiteSpace:'pre-wrap'}}>{routineProfile || 'Nenhuma rotina salva ainda.'}</div>
+              <button className="op-btn-2" style={{marginTop:10}} onClick={()=>setEditingRoutine(true)}>Editar rotina</button>
+            </div>
+          )
+        )}
+      </div>
+
+      <div className="row gap2" style={{marginBottom:16, overflowX:'auto'}}>
+        {TABS.map(t => <button key={t.id} className={`op-tab ${tab===t.id?'active':''}`} onClick={()=>setTab(t.id)}>{t.label}</button>)}
+      </div>
+
+      {tab==='peso' && (
+        <>
+          <div className="grid4" style={{marginBottom:16}}>
+            <StatCard label="Peso atual" value={`${fmtKg(stats.latestWeight)} kg`} />
+            <StatCard label="Faltam" value={stats.goalReached ? '0 kg 🎉' : `${fmtKg(stats.remainingToLose)} kg`} />
+            <StatCard label="Dias restantes" value={`${stats.daysLeft}`} />
+            <StatCard label="Ritmo necessário" value={stats.goalReached ? '—' : `${fmtKg(stats.requiredWeeklyPace,2)} kg/sem`} />
+          </div>
+
+          <div className="op-card" style={{padding:16, marginBottom:16}}>
+            <div className="row" style={{justifyContent:'space-between', marginBottom:10}}>
+              <span className="op-label">Pacing</span>
+              <span className="op-mono" style={{fontSize:12, color:COLORS.textDim}}>ritmo atual: {stats.currentPace===null?'coletando dados':`${fmtKg(stats.currentPace,2)} kg/sem`}</span>
+            </div>
+            <PacingRow label="Tempo de prazo usado" pct={stats.pctDaysUsed} color={COLORS.target} />
+            <PacingRow label="Meta entregue" pct={stats.pctDelivered} color={statusColor} />
+            {stats.projectedDate && !stats.goalReached && (
+              <div className="op-mono" style={{fontSize:12, color:COLORS.textDim, marginTop:10}}>
+                Projeção no ritmo atual: <span style={{color:COLORS.text}}>{fmtShortPT(stats.projectedDate)}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="op-card" style={{padding:16, marginBottom:16}}>
+            <span className="op-label">Trajetória</span>
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={chartData} margin={{top:10,right:8,left:-18,bottom:0}}>
+                <CartesianGrid stroke={COLORS.borderSoft} vertical={false} />
+                <XAxis dataKey="day" tickFormatter={d=>fmtShortPT(addDaysISO(profile.startDate,d))} stroke={COLORS.textFaint} tick={{fontSize:11,fill:COLORS.textFaint}} tickLine={false} axisLine={{stroke:COLORS.border}} minTickGap={30} />
+                <YAxis domain={yDomain} stroke={COLORS.textFaint} tick={{fontSize:11,fill:COLORS.textFaint}} tickLine={false} axisLine={false} width={36} />
+                <ReferenceLine y={profile.goalWeight} stroke={COLORS.good} strokeDasharray="3 3" strokeOpacity={0.5} />
+                <Tooltip contentStyle={{background:COLORS.surface2, border:`1px solid ${COLORS.border}`, borderRadius:8, fontSize:12}} labelFormatter={d=>fmtShortPT(addDaysISO(profile.startDate,d))} formatter={(v,n)=>[v==null?'—':`${fmtKg(v)} kg`, n==='target'?'meta ideal':'peso']} />
+                <Line type="monotone" dataKey="target" stroke={COLORS.target} strokeDasharray="5 4" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                <Line type="monotone" dataKey="actual" stroke={COLORS.accent} strokeWidth={2.5} dot={{r:3, fill:COLORS.accent, strokeWidth:0}} connectNulls isAnimationActive={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="grid2">
+            <div className="op-card" style={{padding:16}}>
+              <span className="op-label">Registrar peso</span>
+              <div className="col gap2" style={{marginTop:10}}>
+                <div className="row gap2">
+                  <input type="date" className="op-input op-mono" value={newDate} max={localISODate()} onChange={e=>setNewDate(e.target.value)} />
+                  <input type="text" inputMode="decimal" className="op-input op-mono" placeholder="kg" style={{maxWidth:90}} value={newWeight} onChange={e=>setNewWeight(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleAddEntry()} />
+                </div>
+                <input type="text" className="op-input" placeholder="nota (opcional)" value={newNote} onChange={e=>setNewNote(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleAddEntry()} />
+                <button className="op-btn" onClick={handleAddEntry}>+ Salvar registro</button>
+              </div>
+            </div>
+            <div className="op-card" style={{padding:16, maxHeight:230, overflowY:'auto'}}>
+              <span className="op-label">Histórico</span>
+              <div style={{marginTop:8}}>
+                {sortedEntries.length===0 ? <div style={{fontSize:13, color:COLORS.textFaint}}>Nenhum registro ainda.</div> :
+                  [...sortedEntries].reverse().map(e => (
+                    <div key={e.id} className="row" style={{justifyContent:'space-between', padding:'6px 2px'}}>
+                      <div>
+                        <span className="op-mono" style={{fontSize:13}}>{fmtKg(e.weight)} kg</span>
+                        <span style={{fontSize:12, color:COLORS.textFaint, marginLeft:8}}>{fmtShortPT(e.date)}</span>
+                      </div>
+                      <button className="op-icon-btn" style={{padding:4}} onClick={()=>handleDeleteEntry(e.id)}>×</button>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {tab==='comida' && (
+        <>
+          <div className="op-card" style={{padding:16, marginBottom:16}}>
+            <span className="op-label">Meta nutricional estimada</span>
+            <div className="grid4" style={{marginTop:10}}>
+              <StatCard label="Calorias/dia" value={`${fmtNum(nutrition.target)} kcal`} />
+              <StatCard label="Proteína" value={`${fmtNum(nutrition.protein)} g`} />
+              <StatCard label="Carboidrato" value={`${fmtNum(nutrition.carbs)} g`} />
+              <StatCard label="Gordura" value={`${fmtNum(nutrition.fat)} g`} />
+            </div>
+            <div style={{marginTop:12}}>
+              <div className="row" style={{justifyContent:'space-between'}}>
+                <span style={{fontSize:12, color:COLORS.textDim}}>Hoje</span>
+                <span className="op-mono" style={{fontSize:12}}>{fmtNum(todayFoodTotal)} / {fmtNum(nutrition.target)} kcal</span>
+              </div>
+              <div className="op-track"><div className="op-track-fill" style={{width:`${clamp((todayFoodTotal/nutrition.target)*100,0,130)}%`, background: todayFoodTotal>nutrition.target?COLORS.warn:COLORS.good}} /></div>
+            </div>
+          </div>
+
+          <div className="op-card" style={{padding:16, marginBottom:16}}>
+            <span className="op-label">Cardápio sugerido (IA)</span>
+            <div className="row gap2 wrap" style={{marginTop:10}}>
+              <input type="text" className="op-input" style={{flex:1, minWidth:180}} placeholder="preferências (opcional)" value={planContext} onChange={e=>setPlanContext(e.target.value)} />
+              <button className="op-btn" onClick={handleGenerateMealPlan} disabled={planLoading}>{planLoading?'Gerando…':'Gerar cardápio'}</button>
+            </div>
+            {planError && <div style={{fontSize:12, color:COLORS.warn, marginTop:8}}>{planError}</div>}
+            {mealPlan && !planLoading && <div className="op-card2" style={{padding:14, marginTop:10, whiteSpace:'pre-wrap', fontSize:13.5, lineHeight:1.5}}>{mealPlan.text}</div>}
+          </div>
+
+          <div className="grid2">
+            <div className="op-card" style={{padding:16}}>
+              <span className="op-label">Registrar refeição</span>
+              <div className="col gap2" style={{marginTop:10}}>
+                <input type="date" className="op-input op-mono" value={foodDate} max={localISODate()} onChange={e=>setFoodDate(e.target.value)} />
+                <input type="text" className="op-input" placeholder="ex: arroz, feijão, frango grelhado" value={foodDesc} onChange={e=>setFoodDesc(e.target.value)} />
+                <button className="op-btn-2" onClick={handleEstimate} disabled={estimating||!foodDesc.trim()}>{estimating?'Estimando…':'Estimar com IA'}</button>
+                {estimateError && <div style={{fontSize:12, color:COLORS.warn}}>{estimateError}</div>}
+                <div className="grid4">
+                  <input type="text" inputMode="decimal" className="op-input op-mono" placeholder="kcal" value={foodCal} onChange={e=>setFoodCal(e.target.value)} />
+                  <input type="text" inputMode="decimal" className="op-input op-mono" placeholder="prot" value={foodProt} onChange={e=>setFoodProt(e.target.value)} />
+                  <input type="text" inputMode="decimal" className="op-input op-mono" placeholder="carb" value={foodCarb} onChange={e=>setFoodCarb(e.target.value)} />
+                  <input type="text" inputMode="decimal" className="op-input op-mono" placeholder="gord" value={foodFat} onChange={e=>setFoodFat(e.target.value)} />
+                </div>
+                <button className="op-btn" onClick={handleAddMeal}>+ Salvar refeição</button>
+              </div>
+            </div>
+            <div className="op-card" style={{padding:16, maxHeight:320, overflowY:'auto'}}>
+              <span className="op-label">Histórico</span>
+              <div style={{marginTop:8}}>
+                {groupByDateDesc(meals).length===0 ? <div style={{fontSize:13, color:COLORS.textFaint}}>Nenhuma refeição ainda.</div> :
+                  groupByDateDesc(meals).map(([date,items]) => (
+                    <div key={date} style={{marginBottom:10}}>
+                      <div className="row" style={{justifyContent:'space-between'}}>
+                        <span style={{fontSize:12, color:COLORS.textDim}}>{fmtShortPT(date)}</span>
+                        <span className="op-mono" style={{fontSize:12}}>{fmtNum(items.reduce((s,i)=>s+i.calories,0))} kcal</span>
+                      </div>
+                      {items.map(m => (
+                        <div key={m.id} className="row" style={{justifyContent:'space-between', padding:'4px 2px'}}>
+                          <div style={{fontSize:12.5}}>{m.description} <span className="op-mono" style={{color:COLORS.textFaint}}>· {fmtNum(m.calories)}kcal</span></div>
+                          <button className="op-icon-btn" style={{padding:3}} onClick={()=>handleDeleteMeal(m.id)}>×</button>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {tab==='treino' && (
+        <>
+          <div className="grid2" style={{marginBottom:16}}>
+            <StatCard label="Sequência atual" value={`${streak} dia${streak===1?'':'s'}`} />
+            <StatCard label="Treinos (7 dias)" value={`${trainedDaysLast7}/7`} />
+          </div>
+          <div className="op-card" style={{padding:16, marginBottom:16}}>
+            <span className="op-label">Plano semanal</span>
+            <div className="col gap2" style={{marginTop:10}}>
+              {WEEKDAYS.map(d => (
+                <div key={d.key} className="row gap2" style={{alignItems:'center'}}>
+                  <span style={{fontSize:12.5, color:COLORS.textDim, width:74, flexShrink:0}}>{d.label}</span>
+                  <input type="text" className="op-input" value={weeklyPlan[d.key]} onChange={e=>updateWeeklyPlanDay(d.key, e.target.value)} />
+                </div>
+              ))}
+            </div>
+            <div className="row gap2 wrap" style={{marginTop:10}}>
+              <input type="text" className="op-input" style={{flex:1, minWidth:180}} placeholder="contexto (opcional)" value={woPlanContext} onChange={e=>setWoPlanContext(e.target.value)} />
+              <button className="op-btn" onClick={handleGenerateWeeklyPlan} disabled={woPlanLoading}>{woPlanLoading?'Gerando…':'Gerar com IA'}</button>
+            </div>
+            {woPlanError && <div style={{fontSize:12, color:COLORS.warn, marginTop:8}}>{woPlanError}</div>}
+          </div>
+
+          <div className="grid2">
+            <div className="op-card" style={{padding:16}}>
+              <span className="op-label">Registrar treino</span>
+              <div className="col gap2" style={{marginTop:10}}>
+                <input type="date" className="op-input op-mono" value={woDate} max={localISODate()} onChange={e=>setWoDate(e.target.value)} />
+                <div className="row gap2">
+                  <select className="op-select" value={woTipo} onChange={e=>setWoTipo(e.target.value)}>
+                    {['Força','Cardio','Misto','Descanso','Outro'].map(o=><option key={o}>{o}</option>)}
+                  </select>
+                  <input type="text" inputMode="numeric" className="op-input op-mono" placeholder="min" style={{maxWidth:80}} value={woDur} onChange={e=>setWoDur(e.target.value)} />
+                </div>
+                <select className="op-select" value={woIntensidade} onChange={e=>setWoIntensidade(e.target.value)}>
+                  {['Leve','Moderada','Intensa'].map(o=><option key={o}>{o}</option>)}
+                </select>
+                <input type="text" className="op-input" placeholder="nota (opcional)" value={woNota} onChange={e=>setWoNota(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleAddWorkout()} />
+                <button className="op-btn" onClick={handleAddWorkout}>+ Salvar treino</button>
+              </div>
+            </div>
+            <div className="op-card" style={{padding:16, maxHeight:320, overflowY:'auto'}}>
+              <span className="op-label">Histórico</span>
+              <div style={{marginTop:8}}>
+                {groupByDateDesc(workoutLogs).length===0 ? <div style={{fontSize:13, color:COLORS.textFaint}}>Nenhum treino ainda.</div> :
+                  groupByDateDesc(workoutLogs).map(([date,items]) => (
+                    <div key={date} style={{marginBottom:10}}>
+                      <div style={{fontSize:12, color:COLORS.textDim}}>{fmtShortPT(date)}</div>
+                      {items.map(w => (
+                        <div key={w.id} className="row" style={{justifyContent:'space-between', padding:'4px 2px'}}>
+                          <div style={{fontSize:12.5}}>{w.tipo}{w.duracao?` · ${w.duracao}min`:''} · {w.intensidade}{w.nota && <span style={{color:COLORS.textFaint}}> — {w.nota}</span>}</div>
+                          <button className="op-icon-btn" style={{padding:3}} onClick={()=>handleDeleteWorkout(w.id)}>×</button>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {tab==='coach' && (
+        <div className="op-card" style={{padding:16}}>
+          <span className="op-label">Analista de progresso (IA)</span>
+          <div style={{fontSize:12.5, color:COLORS.textFaint, margin:'8px 0 10px'}}>Junta peso, comida, treino e rotina num diagnóstico direto.</div>
+          <div className="row gap2 wrap">
+            <input type="text" className="op-input" style={{flex:1, minWidth:180}} placeholder="Pergunta específica (opcional)" value={coachQuestion} onChange={e=>setCoachQuestion(e.target.value)} onKeyDown={e=>e.key==='Enter'&&!coachLoading&&askCoach(coachQuestion)} />
+            <button className="op-btn" onClick={()=>askCoach(coachQuestion)} disabled={coachLoading}>{coachLoading?'Analisando…':'Pedir análise'}</button>
+          </div>
+          {coachError && <div style={{fontSize:12, color:COLORS.warn, marginTop:10}}>{coachError}</div>}
+          {coachMessage && !coachLoading && (
+            <div className="op-card2" style={{padding:14, marginTop:12, whiteSpace:'pre-wrap', fontSize:13.5, lineHeight:1.55}}>
+              {coachMessage}
+              {coachAt && <div className="op-mono" style={{fontSize:11, color:COLORS.textFaint, marginTop:10}}>análise de {new Date(coachAt).toLocaleString('pt-BR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</div>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {showSettings && (
+        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,0.55)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:50, padding:16}} onClick={()=>setShowSettings(false)}>
+          <div className="op-card" style={{padding:20, width:'100%', maxWidth:360}} onClick={e=>e.stopPropagation()}>
+            <div className="row" style={{justifyContent:'space-between', marginBottom:14}}>
+              <span className="op-display" style={{fontSize:15, fontWeight:600}}>Editar operação</span>
+              <button className="op-icon-btn" onClick={()=>setShowSettings(false)}>×</button>
+            </div>
+            <Field label="Peso inicial (kg)"><input className="op-input op-mono" value={draftProfile.startWeight} onChange={e=>setDraftProfile({...draftProfile, startWeight:e.target.value})} /></Field>
+            <Field label="Peso meta (kg)"><input className="op-input op-mono" value={draftProfile.goalWeight} onChange={e=>setDraftProfile({...draftProfile, goalWeight:e.target.value})} /></Field>
+            <Field label="Data de início"><input type="date" className="op-input op-mono" value={draftProfile.startDate} onChange={e=>setDraftProfile({...draftProfile, startDate:e.target.value})} /></Field>
+            <Field label="Prazo (dias)"><input className="op-input op-mono" value={draftProfile.totalDays} onChange={e=>setDraftProfile({...draftProfile, totalDays:e.target.value})} /></Field>
+            <Field label="Nível de atividade">
+              <select className="op-select" value={draftProfile.activityLevel} onChange={e=>setDraftProfile({...draftProfile, activityLevel:e.target.value})}>
+                {Object.keys(ACTIVITY_LABELS).map(k=><option key={k} value={k}>{ACTIVITY_LABELS[k]}</option>)}
+              </select>
+            </Field>
+            <div className="row gap2" style={{marginTop:14}}>
+              <button className="op-btn" style={{flex:1}} onClick={saveSettings}>Salvar</button>
+              <button className="op-btn-ghost" onClick={()=>setShowSettings(false)}>Cancelar</button>
+            </div>
+            <button className="op-btn-ghost" style={{width:'100%', marginTop:10, color:COLORS.warn, borderColor:COLORS.warn}} onClick={resetAll}>Reiniciar todos os dados</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatCard({ label, value }) {
+  return (
+    <div className="op-card" style={{padding:'12px 14px'}}>
+      <div style={{fontSize:11, color:COLORS.textDim, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6}}>{label}</div>
+      <div className="op-mono" style={{fontSize:17, fontWeight:600}}>{value}</div>
+    </div>
+  );
+}
+function PacingRow({ label, pct, color }) {
+  return (
+    <div style={{marginBottom:10}}>
+      <div className="row" style={{justifyContent:'space-between', marginBottom:4}}>
+        <span style={{fontSize:12, color:COLORS.textDim}}>{label}</span>
+        <span className="op-mono" style={{fontSize:12}}>{pct.toFixed(0)}%</span>
+      </div>
+      <div className="op-track"><div className="op-track-fill" style={{width:`${pct}%`, background:color}} /></div>
+    </div>
+  );
+}
+function Field({ label, children }) {
+  return <div style={{marginBottom:12}}><div style={{fontSize:12, color:COLORS.textDim, marginBottom:5}}>{label}</div>{children}</div>;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Operacao90 />);
+</script>
+</body>
+</html>
