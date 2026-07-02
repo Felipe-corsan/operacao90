@@ -41,6 +41,7 @@ const WEEKDAYS = [
 ];
 const ACTIVITY_FACTORS = { leve: 28, moderado: 33, intenso: 38 };
 const ACTIVITY_LABELS = { leve: 'Leve', moderado: 'Moderado', intenso: 'Intenso' };
+const MEAL_TIPOS = ['Café da manhã','Lanche manhã','Almoço','Lanche tarde','Jantar','Ceia','Outro'];
 
 function localISODate(date = new Date()) {
   const off = date.getTimezoneOffset();
@@ -227,10 +228,12 @@ function Operacao90() {
   const [coachQuestion, setCoachQuestion] = useState('');
   const [coachLoading, setCoachLoading] = useState(false);
   const [coachError, setCoachError] = useState('');
+  const [foodTipo, setFoodTipo] = useState('Almoço');
+  const [waterByDate, setWaterByDate] = useState(initial?.waterByDate || {});
 
   useEffect(() => {
     if (firstLoad.current) { firstLoad.current = false; return; }
-    const ok = saveState({ profile, entries, meals, mealPlan, weeklyPlan, workoutLogs, coachMessage, coachAt, routineProfile });
+    const ok = saveState({ profile, entries, meals, mealPlan, weeklyPlan, workoutLogs, coachMessage, coachAt, routineProfile, waterByDate });
     setSaveError(ok ? '' : 'Não consegui salvar agora (armazenamento local cheio ou bloqueado).');
   }, [profile, entries, meals, mealPlan, weeklyPlan, workoutLogs, coachMessage, coachAt, routineProfile]);
 
@@ -312,6 +315,17 @@ function Operacao90() {
     return s;
   }, [workoutLogs, stats.today]);
 
+  const weightStreak = useMemo(() => {
+    const wd = new Set(entries.map(e => e.date));
+    let s=0, d=stats.today; while(wd.has(d)){s++;d=addDaysISO(d,-1);} return s;
+  }, [entries, stats.today]);
+  const todayWeekday = useMemo(() => {
+    const d = parseISO(stats.today);
+    return ['dom','seg','ter','qua','qui','sex','sab'][d.getDay()];
+  }, [stats.today]);
+  const todayPlannedWorkout = useMemo(() => weeklyPlan[todayWeekday]||'', [weeklyPlan, todayWeekday]);
+  function updateWater(date, delta) { setWaterByDate(prev => ({...prev, [date]: Math.max(0,(prev[date]||0)+delta)})); }
+
   function handleAddEntry() {
     const w = parseFloat(newWeight.replace(',', '.'));
     if (!w || w<=0 || w>400) return;
@@ -352,7 +366,7 @@ function Operacao90() {
   function handleAddMeal() {
     const cal = parseFloat(String(foodCal).replace(',', '.'));
     if (!foodDesc.trim() || !cal) return;
-    setMeals([...meals, { id:`${foodDate}-${Date.now()}`, date:foodDate, description:foodDesc.trim(), calories:cal,
+    setMeals([...meals, { id:`${foodDate}-${Date.now()}`, date:foodDate, tipo:foodTipo, description:foodDesc.trim(), calories:cal,
       protein: parseFloat(String(foodProt).replace(',', '.'))||0, carbs: parseFloat(String(foodCarb).replace(',', '.'))||0, fat: parseFloat(String(foodFat).replace(',', '.'))||0 }]);
     setFoodDesc(''); setFoodCal(''); setFoodProt(''); setFoodCarb(''); setFoodFat('');
   }
@@ -402,7 +416,7 @@ function Operacao90() {
         statusVsTrajetoriaIdeal: stats.status, metaJaAtingida: stats.goalReached,
         metaCaloricaDiaria: Math.round(nutrition.target), caloriasHoje: Math.round(todayFoodTotal),
         mediaCaloriasUltimos7dias: avgCal7d===null?'sem dados':Math.round(avgCal7d),
-        diasTreinadosUltimos7: trainedDaysLast7, streakAtualDeTreinoEmDias: streak,
+        diasTreinadosUltimos7: trainedDaysLast7, streakAtualDeTreinoEmDias: streak, aguaHojeCopos: waterByDate[stats.today]||0,
         planoSemanalDeTreino: weeklyPlan, ultimosRegistrosDePeso: recentWeights,
         ultimasRefeicoesPorDia: recentMeals, ultimosTreinosPorDia: recentWorkouts, rotinaDaPessoa: routineProfile || 'não informada',
       };
@@ -584,11 +598,34 @@ function Operacao90() {
             {mealPlan && !planLoading && <div className="op-card2" style={{padding:14, marginTop:10, whiteSpace:'pre-wrap', fontSize:13.5, lineHeight:1.5}}>{mealPlan.text}</div>}
           </div>
 
+          <div className="op-card" style={{padding:16, marginBottom:16}}>
+            <div className="row" style={{justifyContent:'space-between', alignItems:'center'}}>
+              <span className="op-label">Água</span>
+              <input type="date" className="op-input op-mono" style={{width:130, fontSize:12}} value={foodDate} max={localISODate()} onChange={e=>setFoodDate(e.target.value)} />
+            </div>
+            <div className="row" style={{alignItems:'center', gap:16, marginTop:12}}>
+              <button className="op-btn-2" style={{padding:'8px 18px', fontSize:22, lineHeight:1}} onClick={()=>updateWater(foodDate,-1)}>−</button>
+              <div style={{textAlign:'center', flex:1}}>
+                <div className="op-mono" style={{fontSize:32, fontWeight:700}}>{waterByDate[foodDate]||0}</div>
+                <div style={{fontSize:11, color:COLORS.textFaint}}>copos · {((waterByDate[foodDate]||0)*250)}ml</div>
+              </div>
+              <button className="op-btn" style={{padding:'8px 18px', fontSize:22, lineHeight:1}} onClick={()=>updateWater(foodDate,1)}>+</button>
+            </div>
+            <div className="row" style={{gap:6, marginTop:10, flexWrap:'wrap'}}>
+              {[1,2,4,6,8].map(n=><button key={n} className="op-btn-2" style={{fontSize:11,padding:'4px 10px'}} onClick={()=>setWaterByDate(prev=>({...prev,[foodDate]:n}))}>{n}x</button>)}
+            </div>
+          </div>
+
           <div className="grid2">
             <div className="op-card" style={{padding:16}}>
               <span className="op-label">Registrar refeição</span>
               <div className="col gap2" style={{marginTop:10}}>
-                <input type="date" className="op-input op-mono" value={foodDate} max={localISODate()} onChange={e=>setFoodDate(e.target.value)} />
+                <div className="row gap2">
+                  <input type="date" className="op-input op-mono" style={{flex:1}} value={foodDate} max={localISODate()} onChange={e=>setFoodDate(e.target.value)} />
+                  <select className="op-select" style={{flex:1}} value={foodTipo} onChange={e=>setFoodTipo(e.target.value)}>
+                    {MEAL_TIPOS.map(t=><option key={t}>{t}</option>)}
+                  </select>
+                </div>
                 <input type="text" className="op-input" placeholder="ex: arroz, feijão, frango grelhado" value={foodDesc} onChange={e=>setFoodDesc(e.target.value)} />
                 <button className="op-btn-2" onClick={handleEstimate} disabled={estimating||!foodDesc.trim()}>{estimating?'Estimando…':'Estimar com IA'}</button>
                 {estimateError && <div style={{fontSize:12, color:COLORS.warn}}>{estimateError}</div>}
@@ -601,20 +638,29 @@ function Operacao90() {
                 <button className="op-btn" onClick={handleAddMeal}>+ Salvar refeição</button>
               </div>
             </div>
-            <div className="op-card" style={{padding:16, maxHeight:320, overflowY:'auto'}}>
+            <div className="op-card" style={{padding:16, maxHeight:380, overflowY:'auto'}}>
               <span className="op-label">Histórico</span>
               <div style={{marginTop:8}}>
                 {groupByDateDesc(meals).length===0 ? <div style={{fontSize:13, color:COLORS.textFaint}}>Nenhuma refeição ainda.</div> :
                   groupByDateDesc(meals).map(([date,items]) => (
-                    <div key={date} style={{marginBottom:10}}>
-                      <div className="row" style={{justifyContent:'space-between'}}>
-                        <span style={{fontSize:12, color:COLORS.textDim}}>{fmtShortPT(date)}</span>
-                        <span className="op-mono" style={{fontSize:12}}>{fmtNum(items.reduce((s,i)=>s+i.calories,0))} kcal</span>
+                    <div key={date} style={{marginBottom:14}}>
+                      <div className="row" style={{justifyContent:'space-between', marginBottom:5}}>
+                        <span style={{fontSize:12, color:COLORS.textDim, fontWeight:600}}>{fmtShortPT(date)}</span>
+                        <div className="row gap2" style={{alignItems:'center'}}>
+                          {waterByDate[date]>0 && <span style={{fontSize:11, color:COLORS.target}}>💧{waterByDate[date]}x</span>}
+                          <span className="op-mono" style={{fontSize:12}}>{fmtNum(items.reduce((s,i)=>s+i.calories,0))} kcal</span>
+                        </div>
                       </div>
                       {items.map(m => (
-                        <div key={m.id} className="row" style={{justifyContent:'space-between', padding:'4px 2px'}}>
-                          <div style={{fontSize:12.5}}>{m.description} <span className="op-mono" style={{color:COLORS.textFaint}}>· {fmtNum(m.calories)}kcal</span></div>
-                          <button className="op-icon-btn" style={{padding:3}} onClick={()=>handleDeleteMeal(m.id)}>×</button>
+                        <div key={m.id} style={{padding:'5px 6px', borderLeft:`2px solid ${COLORS.borderSoft}`, marginBottom:4}}>
+                          <div className="row" style={{justifyContent:'space-between', alignItems:'flex-start'}}>
+                            <div>
+                              {m.tipo && <span style={{fontSize:10, color:COLORS.accent, textTransform:'uppercase', letterSpacing:'0.04em', display:'block'}}>{m.tipo}</span>}
+                              <span style={{fontSize:12.5}}>{m.description}</span>
+                              <span className="op-mono" style={{color:COLORS.textFaint, fontSize:12}}> · {fmtNum(m.calories)}kcal</span>
+                            </div>
+                            <button className="op-icon-btn" style={{padding:3,marginLeft:4,flexShrink:0}} onClick={()=>handleDeleteMeal(m.id)}>×</button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -627,9 +673,18 @@ function Operacao90() {
 
       {tab==='treino' && (
         <>
-          <div className="grid2" style={{marginBottom:16}}>
-            <StatCard label="Sequência atual" value={`${streak} dia${streak===1?'':'s'}`} />
-            <StatCard label="Treinos (7 dias)" value={`${trainedDaysLast7}/7`} />
+          <div className="op-card" style={{padding:16, marginBottom:16, borderColor:COLORS.accent}}>
+            <div className="row" style={{justifyContent:'space-between', alignItems:'center', marginBottom:6}}>
+              <span className="op-label">Treino de hoje · {WEEKDAYS.find(w=>w.key===todayWeekday)?.label}</span>
+              {workoutLogs.some(w=>w.date===stats.today) && <span style={{fontSize:12, color:COLORS.good}}>✓ registrado</span>}
+            </div>
+            <div style={{fontSize:15, color:COLORS.text}}>{todayPlannedWorkout||'Não definido no plano semanal'}</div>
+          </div>
+          <div className="grid4" style={{marginBottom:16}}>
+            <StatCard label="Seq. treino" value={`${streak}d`} />
+            <StatCard label="Treinos 7d" value={`${trainedDaysLast7}/7`} />
+            <StatCard label="Seq. peso" value={`${weightStreak}d`} />
+            <StatCard label="Peso atual" value={`${fmtKg(stats.latestWeight)} kg`} />
           </div>
           <div className="op-card" style={{padding:16, marginBottom:16}}>
             <span className="op-label">Plano semanal</span>
