@@ -683,32 +683,32 @@ function Operacao90() {
             <WeightChart chartData={chartData} profile={profile} yDomain={yDomain} />
           </div>
 
-          <div className="grid2">
-            <div className="op-card" style={{padding:16}}>
-              <span className="op-label">Registrar peso</span>
-              <div className="col gap2" style={{marginTop:10}}>
-                <div className="row gap2">
-                  <input type="date" className="op-input op-mono" value={newDate} max={localISODate()} onChange={e=>setNewDate(e.target.value)} />
-                  <input type="text" inputMode="decimal" className="op-input op-mono" placeholder="kg" style={{maxWidth:90}} value={newWeight} onChange={e=>setNewWeight(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleAddEntry()} />
-                </div>
-                <input type="text" className="op-input" placeholder="nota (opcional)" value={newNote} onChange={e=>setNewNote(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleAddEntry()} />
-                <button className="op-btn" onClick={handleAddEntry}>+ Salvar registro</button>
+          <div className="op-card" style={{padding:16, marginBottom:20}}>
+            <span className="op-label">Registrar peso</span>
+            <div className="col gap2" style={{marginTop:10}}>
+              <div className="row gap2">
+                <input type="date" className="op-input op-mono" value={newDate} max={localISODate()} onChange={e=>setNewDate(e.target.value)} />
+                <input type="text" inputMode="decimal" className="op-input op-mono" placeholder="kg" style={{maxWidth:90}} value={newWeight} onChange={e=>setNewWeight(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleAddEntry()} />
               </div>
+              <input type="text" className="op-input" placeholder="nota (opcional)" value={newNote} onChange={e=>setNewNote(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleAddEntry()} />
+              <button className="op-btn" onClick={handleAddEntry}>+ Salvar registro</button>
             </div>
-            <div className="op-card" style={{padding:16, maxHeight:230, overflowY:'auto'}}>
-              <span className="op-label">Histórico</span>
-              <div style={{marginTop:8}}>
-                {sortedEntries.length===0 ? <div style={{fontSize:13, color:COLORS.textFaint}}>Nenhum registro ainda.</div> :
-                  [...sortedEntries].reverse().map(e => (
-                    <div key={e.id} className="row" style={{justifyContent:'space-between', padding:'6px 2px'}}>
-                      <div>
-                        <span className="op-mono" style={{fontSize:13}}>{fmtKg(e.weight)} kg</span>
-                        <span style={{fontSize:12, color:COLORS.textFaint, marginLeft:8}}>{fmtShortPT(e.date)}</span>
-                      </div>
-                      <button className="op-icon-btn" style={{padding:4}} onClick={()=>handleDeleteEntry(e.id)}>×</button>
+          </div>
+
+          <div className="op-card" style={{padding:16}}>
+            <span className="op-label">Histórico de peso</span>
+            <div style={{marginTop:8}}>
+              {sortedEntries.length===0 ? <div style={{fontSize:13, color:COLORS.textFaint}}>Nenhum registro ainda.</div> :
+                [...sortedEntries].reverse().map(e => (
+                  <div key={e.id} className="row" style={{justifyContent:'space-between', padding:'8px 4px', borderBottom:`1px solid ${COLORS.borderSoft}`}}>
+                    <div>
+                      <span className="op-mono" style={{fontSize:14}}>{fmtKg(e.weight)} kg</span>
+                      <span style={{fontSize:12, color:COLORS.textFaint, marginLeft:10}}>{fmtShortPT(e.date)}</span>
+                      {e.note && <span style={{fontSize:12, color:COLORS.textDim, marginLeft:10}}>{e.note}</span>}
                     </div>
-                  ))}
-              </div>
+                    <button className="op-icon-btn" style={{padding:4}} onClick={()=>handleDeleteEntry(e.id)}>×</button>
+                  </div>
+                ))}
             </div>
           </div>
         </>
@@ -761,9 +761,8 @@ function Operacao90() {
             </div>
           </div>
 
-          <div className="grid2">
-            <div className="op-card" style={{padding:16}}>
-              <span className="op-label">Registrar refeição</span>
+          <div className="op-card" style={{padding:16, marginBottom:20}}>
+            <span className="op-label">Registrar refeição</span>
               <div className="col gap2" style={{marginTop:10}}>
                 <div className="row gap2">
                   <input type="date" className="op-input op-mono" style={{flex:1}} value={foodDate} max={localISODate()} onChange={e=>setFoodDate(e.target.value)} />
@@ -811,8 +810,10 @@ function Operacao90() {
                 )}
               </div>
             </div>
-            <div className="op-card" style={{padding:16, maxHeight:380, overflowY:'auto'}}>
-              <span className="op-label">Histórico</span>
+          </div>
+
+          <div className="op-card" style={{padding:16}}>
+            <span className="op-label">Histórico de refeições</span>
               <div style={{marginTop:8}}>
                 {groupByDateDesc(meals).length===0 ? <div style={{fontSize:13, color:COLORS.textFaint}}>Nenhuma refeição ainda.</div> :
                   groupByDateDesc(meals).map(([date,items]) => (
@@ -838,7 +839,6 @@ function Operacao90() {
                       ))}
                     </div>
                   ))}
-              </div>
             </div>
           </div>
         </>
@@ -876,9 +876,8 @@ function Operacao90() {
             {woPlanError && <div style={{fontSize:12, color:COLORS.warn, marginTop:8}}>{woPlanError}</div>}
           </div>
 
-          <div className="grid2">
-            <div className="op-card" style={{padding:16}}>
-              <span className="op-label">Registrar treino</span>
+          <div className="op-card" style={{padding:16, marginBottom:20}}>
+            <span className="op-label">Registrar treino</span>
               <div className="col gap2" style={{marginTop:10}}>
                 <input type="date" className="op-input op-mono" value={woDate} max={localISODate()} onChange={e=>setWoDate(e.target.value)} />
                 <div className="row gap2">
@@ -898,8 +897,10 @@ function Operacao90() {
                 <button className="op-btn" onClick={handleAddWorkout}>+ Salvar treino</button>
               </div>
             </div>
-            <div className="op-card" style={{padding:16, maxHeight:320, overflowY:'auto'}}>
-              <span className="op-label">Histórico</span>
+          </div>
+
+          <div className="op-card" style={{padding:16}}>
+            <span className="op-label">Histórico de treinos</span>
               <div style={{marginTop:8}}>
                 {groupByDateDesc(workoutLogs).length===0 ? <div style={{fontSize:13, color:COLORS.textFaint}}>Nenhum treino ainda.</div> :
                   groupByDateDesc(workoutLogs).map(([date,items]) => (
@@ -913,7 +914,6 @@ function Operacao90() {
                       ))}
                     </div>
                   ))}
-              </div>
             </div>
           </div>
         </>
