@@ -43,6 +43,21 @@ const ACTIVITY_FACTORS = { leve: 28, moderado: 33, intenso: 38 };
 const ACTIVITY_LABELS = { leve: 'Leve', moderado: 'Moderado', intenso: 'Intenso' };
 const MEAL_TIPOS = ['Café da manhã','Lanche manhã','Almoço','Lanche tarde','Jantar','Ceia','Outro'];
 
+const BADGES = [
+  { id:'first_weight', emoji:'🏋️', label:'Primeiro peso', check:d=>d.entries.length>=1 },
+  { id:'streak_3', emoji:'🔥', label:'3 dias seguidos', check:d=>d.weightStreak>=3 },
+  { id:'streak_7', emoji:'⚡', label:'Semana de peso', check:d=>d.weightStreak>=7 },
+  { id:'first_workout', emoji:'💪', label:'Primeiro treino', check:d=>d.workoutLogs.length>=1 },
+  { id:'workout_streak_3', emoji:'🏃', label:'3 treinos seguidos', check:d=>d.streak>=3 },
+  { id:'first_meal', emoji:'🍽️', label:'Primeira refeição', check:d=>d.meals.length>=1 },
+  { id:'hydrated', emoji:'💧', label:'Hidratado (8x)', check:d=>Object.values(d.waterByDate).some(v=>v>=8) },
+  { id:'meals_10', emoji:'📊', label:'10 refeições', check:d=>d.meals.length>=10 },
+  { id:'lost_2', emoji:'📉', label:'Primeiros 2kg', check:d=>d.stats.lostSoFar>=2 },
+  { id:'lost_5', emoji:'🎯', label:'5kg perdidos', check:d=>d.stats.lostSoFar>=5 },
+  { id:'lost_10', emoji:'🏆', label:'10kg perdidos', check:d=>d.stats.lostSoFar>=10 },
+  { id:'voice_meal', emoji:'🎤', label:'Refeição por voz', check:d=>d.voiceMealUsed },
+];
+
 function localISODate(date = new Date()) {
   const off = date.getTimezoneOffset();
   const local = new Date(date.getTime() - off * 60000);
@@ -178,6 +193,25 @@ function saveState(state) {
   catch (e) { return false; }
 }
 
+function useSpeechRecognition({ onResult }) {
+  const recRef = useRef(null);
+  const [listening, setListening] = useState(false);
+  const cbRef = useRef(onResult);
+  useEffect(() => { cbRef.current = onResult; });
+  function start() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { alert('Reconhecimento de voz não suportado. Use Chrome ou Edge.'); return; }
+    const rec = new SR();
+    rec.lang = 'pt-BR'; rec.continuous = false; rec.interimResults = false;
+    rec.onresult = e => { cbRef.current(e.results[0][0].transcript); setListening(false); };
+    rec.onend = () => setListening(false);
+    rec.onerror = () => setListening(false);
+    rec.start(); recRef.current = rec; setListening(true);
+  }
+  function stop() { if (recRef.current) recRef.current.stop(); setListening(false); }
+  return { listening, start, stop };
+}
+
 function Operacao90() {
   const initial = loadState();
   const [profile, setProfile] = useState(initial?.profile ? { ...DEFAULT_PROFILE, ...initial.profile } : DEFAULT_PROFILE);
@@ -230,12 +264,21 @@ function Operacao90() {
   const [coachError, setCoachError] = useState('');
   const [foodTipo, setFoodTipo] = useState('Almoço');
   const [waterByDate, setWaterByDate] = useState(initial?.waterByDate || {});
+  const [measurements, setMeasurements] = useState(initial?.measurements || []);
+  const [favoriteMeals, setFavoriteMeals] = useState(initial?.favoriteMeals || []);
+  const [voiceMealUsed, setVoiceMealUsed] = useState(initial?.voiceMealUsed || false);
+  const [measDate, setMeasDate] = useState(localISODate());
+  const [measCintura, setMeasCintura] = useState('');
+  const [measPeito, setMeasPeito] = useState('');
+  const [measBraco, setMeasBraco] = useState('');
+  const [measQuadril, setMeasQuadril] = useState('');
+  const [showFavorites, setShowFavorites] = useState(false);
 
   useEffect(() => {
     if (firstLoad.current) { firstLoad.current = false; return; }
-    const ok = saveState({ profile, entries, meals, mealPlan, weeklyPlan, workoutLogs, coachMessage, coachAt, routineProfile, waterByDate });
+    const ok = saveState({ profile, entries, meals, mealPlan, weeklyPlan, workoutLogs, coachMessage, coachAt, routineProfile, waterByDate, measurements, favoriteMeals, voiceMealUsed });
     setSaveError(ok ? '' : 'Não consegui salvar agora (armazenamento local cheio ou bloqueado).');
-  }, [profile, entries, meals, mealPlan, weeklyPlan, workoutLogs, coachMessage, coachAt, routineProfile]);
+  }, [profile, entries, meals, mealPlan, weeklyPlan, workoutLogs, coachMessage, coachAt, routineProfile, waterByDate, measurements, favoriteMeals, voiceMealUsed]);
 
   const deadlineISO = useMemo(() => addDaysISO(profile.startDate, profile.totalDays), [profile.startDate, profile.totalDays]);
   const sortedEntries = useMemo(() => [...entries].sort((a,b)=>a.date.localeCompare(b.date)), [entries]);
@@ -324,7 +367,63 @@ function Operacao90() {
     return ['dom','seg','ter','qua','qui','sex','sab'][d.getDay()];
   }, [stats.today]);
   const todayPlannedWorkout = useMemo(() => weeklyPlan[todayWeekday]||'', [weeklyPlan, todayWeekday]);
+
+  const xp = useMemo(() => entries.length*10 + meals.length*5 + workoutLogs.filter(w=>w.tipo!=='Descanso').length*20 + weightStreak*2 + streak*3, [entries, meals, workoutLogs, weightStreak, streak]);
+  const level = useMemo(() => Math.max(1, Math.floor(xp/100)+1), [xp]);
+  const xpInLevel = useMemo(() => xp % 100, [xp]);
+  const unlockedBadges = useMemo(() => BADGES.filter(b => {
+    try { return b.check({entries, meals, workoutLogs, waterByDate, stats, weightStreak, streak, voiceMealUsed}); }
+    catch(e) { return false; }
+  }), [entries, meals, workoutLogs, waterByDate, stats, weightStreak, streak, voiceMealUsed]);
   function updateWater(date, delta) { setWaterByDate(prev => ({...prev, [date]: Math.max(0,(prev[date]||0)+delta)})); }
+
+  const mealVoice = useSpeechRecognition({ onResult: async (transcript) => {
+    setFoodDesc(transcript);
+    setVoiceMealUsed(true);
+    setEstimating(true); setEstimateError('');
+    try {
+      const sys = 'Você estima valores nutricionais de alimentos em português do Brasil. Responda APENAS JSON válido, sem markdown: {"calorias":NUMERO,"proteina":NUMERO,"carboidrato":NUMERO,"gordura":NUMERO}. Valores em kcal e gramas.';
+      const text = await callClaude({ system: sys, content: transcript, maxTokens: 200 });
+      const parsed = JSON.parse(text.replace(/```json|```/g,'').trim());
+      setFoodCal(String(Math.round(parsed.calorias||0)));
+      setFoodProt(String(Math.round(parsed.proteina||0)));
+      setFoodCarb(String(Math.round(parsed.carboidrato||0)));
+      setFoodFat(String(Math.round(parsed.gordura||0)));
+    } catch(e) { setEstimateError('Não consegui estimar. Confira os campos.'); }
+    finally { setEstimating(false); }
+  }});
+
+  const workoutVoice = useSpeechRecognition({ onResult: (transcript) => {
+    setWoNota(transcript);
+  }});
+
+  function handleAddMeasurement() {
+    const item = { id:`${measDate}-${Date.now()}`, date:measDate,
+      cintura:parseFloat(measCintura)||null, peito:parseFloat(measPeito)||null,
+      braco:parseFloat(measBraco)||null, quadril:parseFloat(measQuadril)||null };
+    setMeasurements([...measurements.filter(m=>m.date!==measDate), item]);
+    setMeasCintura(''); setMeasPeito(''); setMeasBraco(''); setMeasQuadril('');
+  }
+  function handleDeleteMeasurement(id) { setMeasurements(measurements.filter(m=>m.id!==id)); }
+
+  function handleSaveFavorite() {
+    if (!foodDesc.trim() || !foodCal) return;
+    const fav = { id:`fav-${Date.now()}`, description:foodDesc.trim(), tipo:foodTipo,
+      calories:parseFloat(foodCal)||0, protein:parseFloat(foodProt)||0,
+      carbs:parseFloat(foodCarb)||0, fat:parseFloat(foodFat)||0 };
+    setFavoriteMeals([fav, ...favoriteMeals.filter(f=>f.description!==fav.description).slice(0,19)]);
+  }
+  function handleLoadFavorite(fav) {
+    setFoodDesc(fav.description); setFoodTipo(fav.tipo);
+    setFoodCal(String(fav.calories)); setFoodProt(String(fav.protein));
+    setFoodCarb(String(fav.carbs)); setFoodFat(String(fav.fat));
+    setShowFavorites(false);
+  }
+  function handleDeleteFavorite(id) { setFavoriteMeals(favoriteMeals.filter(f=>f.id!==id)); }
+
+  async function handleWeeklyReport() {
+    await askCoach('Gera meu relatório semanal: resume peso, nutrição, treinos e hidratação da última semana. Dá uma nota de A a F pra cada categoria e 3 recomendações práticas pra semana que vem.');
+  }
 
   function handleAddEntry() {
     const w = parseFloat(newWeight.replace(',', '.'));
@@ -434,7 +533,7 @@ function Operacao90() {
 
   const TABS = [
     { id:'peso', label:'Peso' }, { id:'comida', label:'Alimentação' },
-    { id:'treino', label:'Treino' }, { id:'coach', label:'IA Coach' },
+    { id:'treino', label:'Treino' }, { id:'corpo', label:'Corpo' }, { id:'coach', label:'IA Coach' },
   ];
 
   return (
@@ -471,6 +570,13 @@ function Operacao90() {
           <div className="op-label">Operação</div>
           <h1 className="op-display" style={{fontSize:26, fontWeight:700, margin:'2px 0'}}>{fmtKg(profile.startWeight,0)} → {fmtKg(profile.goalWeight,0)} kg</h1>
           <div className="op-mono" style={{fontSize:12, color:COLORS.textDim}}>Dia {Math.max(1,stats.elapsed)} de {profile.totalDays} · prazo {fmtShortPT(deadlineISO)}</div>
+        <div className="row gap2" style={{alignItems:'center', marginTop:4}}>
+          <span className="op-mono" style={{fontSize:11, color:COLORS.accent, fontWeight:700}}>Nv.{level}</span>
+          <div style={{flex:1, maxWidth:80, height:4, borderRadius:3, background:COLORS.surface2}}>
+            <div style={{width:`${xpInLevel}%`, height:'100%', background:COLORS.accent, borderRadius:3}} />
+          </div>
+          <span className="op-mono" style={{fontSize:10, color:COLORS.textFaint}}>{xp}xp</span>
+        </div>
         </div>
         <div className="row gap2" style={{alignItems:'center'}}>
           <div className="op-mono" style={{fontSize:12, fontWeight:600, padding:'6px 12px', borderRadius:999, background:statusBg, color:statusColor}}>
@@ -626,8 +732,16 @@ function Operacao90() {
                     {MEAL_TIPOS.map(t=><option key={t}>{t}</option>)}
                   </select>
                 </div>
-                <input type="text" className="op-input" placeholder="ex: arroz, feijão, frango grelhado" value={foodDesc} onChange={e=>setFoodDesc(e.target.value)} />
-                <button className="op-btn-2" onClick={handleEstimate} disabled={estimating||!foodDesc.trim()}>{estimating?'Estimando…':'Estimar com IA'}</button>
+                <div className="row gap2">
+                  <input type="text" className="op-input" style={{flex:1}} placeholder="ex: arroz, feijão, frango grelhado" value={foodDesc} onChange={e=>setFoodDesc(e.target.value)} />
+                  <button className={mealVoice.listening?'op-btn':'op-btn-2'} style={{padding:'8px 12px', fontSize:18, flexShrink:0}} onClick={mealVoice.listening?mealVoice.stop:mealVoice.start} title="Narrar por voz">{mealVoice.listening?'⏹':'🎤'}</button>
+                </div>
+                {mealVoice.listening && <div style={{fontSize:12, color:COLORS.accent, marginTop:2}}>🔴 Ouvindo… fale o que comeu</div>}
+                {estimating && <div style={{fontSize:12, color:COLORS.textDim}}>Estimando calorias…</div>}
+                <div className="row gap2">
+                  <button className="op-btn-2" style={{flex:1}} onClick={handleEstimate} disabled={estimating||!foodDesc.trim()}>{estimating?'Estimando…':'Estimar com IA'}</button>
+                  <button className="op-btn-2" style={{padding:'8px 12px'}} onClick={handleSaveFavorite} disabled={!foodDesc.trim()||!foodCal} title="Salvar como favorito">⭐</button>
+                </div>
                 {estimateError && <div style={{fontSize:12, color:COLORS.warn}}>{estimateError}</div>}
                 <div className="grid4">
                   <input type="text" inputMode="decimal" className="op-input op-mono" placeholder="kcal" value={foodCal} onChange={e=>setFoodCal(e.target.value)} />
@@ -636,6 +750,26 @@ function Operacao90() {
                   <input type="text" inputMode="decimal" className="op-input op-mono" placeholder="gord" value={foodFat} onChange={e=>setFoodFat(e.target.value)} />
                 </div>
                 <button className="op-btn" onClick={handleAddMeal}>+ Salvar refeição</button>
+                {favoriteMeals.length > 0 && (
+                  <div>
+                    <button className="op-btn-ghost" style={{width:'100%', fontSize:12, marginTop:4}} onClick={()=>setShowFavorites(!showFavorites)}>
+                      ⭐ Favoritos ({favoriteMeals.length}) {showFavorites?'▲':'▼'}
+                    </button>
+                    {showFavorites && (
+                      <div className="op-card2" style={{marginTop:6, maxHeight:200, overflowY:'auto'}}>
+                        {favoriteMeals.map(f => (
+                          <div key={f.id} className="row" style={{alignItems:'center', padding:'6px 8px', borderBottom:`1px solid ${COLORS.borderSoft}`}}>
+                            <div style={{flex:1, cursor:'pointer'}} onClick={()=>handleLoadFavorite(f)}>
+                              <div style={{fontSize:12.5}}>{f.description}</div>
+                              <div className="op-mono" style={{fontSize:11, color:COLORS.textFaint}}>{f.calories}kcal · {f.tipo}</div>
+                            </div>
+                            <button className="op-icon-btn" style={{padding:3}} onClick={()=>handleDeleteFavorite(f.id)}>×</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
             <div className="op-card" style={{padding:16, maxHeight:380, overflowY:'auto'}}>
@@ -717,7 +851,11 @@ function Operacao90() {
                 <select className="op-select" value={woIntensidade} onChange={e=>setWoIntensidade(e.target.value)}>
                   {['Leve','Moderada','Intensa'].map(o=><option key={o}>{o}</option>)}
                 </select>
-                <input type="text" className="op-input" placeholder="nota (opcional)" value={woNota} onChange={e=>setWoNota(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleAddWorkout()} />
+                <div className="row gap2">
+                  <input type="text" className="op-input" style={{flex:1}} placeholder="ex: supino 4x12 80kg" value={woNota} onChange={e=>setWoNota(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleAddWorkout()} />
+                  <button className={workoutVoice.listening?'op-btn':'op-btn-2'} style={{padding:'8px 12px', fontSize:18, flexShrink:0}} onClick={workoutVoice.listening?workoutVoice.stop:workoutVoice.start} title="Narrar treino por voz">{workoutVoice.listening?'⏹':'🎤'}</button>
+                </div>
+                {workoutVoice.listening && <div style={{fontSize:12, color:COLORS.accent, marginTop:2}}>🔴 Ouvindo… descreva seu treino</div>}
                 <button className="op-btn" onClick={handleAddWorkout}>+ Salvar treino</button>
               </div>
             </div>
@@ -742,14 +880,94 @@ function Operacao90() {
         </>
       )}
 
+      {tab==='corpo' && (
+        <>
+          <div className="grid4" style={{marginBottom:16}}>
+            {[['Cintura','cintura'],['Peito','peito'],['Braço','braco'],['Quadril','quadril']].map(([label,field]) => {
+              const sorted = [...measurements].sort((a,b)=>a.date.localeCompare(b.date));
+              const last = sorted[sorted.length-1];
+              const prev = sorted[sorted.length-2];
+              const val = last?.[field];
+              const d = (last&&prev&&last[field]!=null&&prev[field]!=null) ? (last[field]-prev[field]).toFixed(1) : null;
+              return (
+                <div key={field} className="op-card" style={{padding:'12px 14px'}}>
+                  <div style={{fontSize:11, color:COLORS.textDim, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6}}>{label} cm</div>
+                  <div className="op-mono" style={{fontSize:17, fontWeight:600}}>{val??'—'}</div>
+                  {d && <div className="op-mono" style={{fontSize:11, color:parseFloat(d)<0?COLORS.good:COLORS.warn, marginTop:2}}>{parseFloat(d)>0?'+':''}{d}</div>}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="grid2" style={{marginBottom:16}}>
+            <div className="op-card" style={{padding:16}}>
+              <span className="op-label">Registrar medidas</span>
+              <div className="col gap2" style={{marginTop:10}}>
+                <input type="date" className="op-input op-mono" value={measDate} max={localISODate()} onChange={e=>setMeasDate(e.target.value)} />
+                <div className="grid2">
+                  <input type="text" inputMode="decimal" className="op-input op-mono" placeholder="Cintura cm" value={measCintura} onChange={e=>setMeasCintura(e.target.value)} />
+                  <input type="text" inputMode="decimal" className="op-input op-mono" placeholder="Peito cm" value={measPeito} onChange={e=>setMeasPeito(e.target.value)} />
+                  <input type="text" inputMode="decimal" className="op-input op-mono" placeholder="Braço cm" value={measBraco} onChange={e=>setMeasBraco(e.target.value)} />
+                  <input type="text" inputMode="decimal" className="op-input op-mono" placeholder="Quadril cm" value={measQuadril} onChange={e=>setMeasQuadril(e.target.value)} />
+                </div>
+                <button className="op-btn" onClick={handleAddMeasurement}>+ Salvar medidas</button>
+              </div>
+            </div>
+            <div className="op-card" style={{padding:16, maxHeight:280, overflowY:'auto'}}>
+              <span className="op-label">Histórico</span>
+              <div style={{marginTop:8}}>
+                {measurements.length===0
+                  ? <div style={{fontSize:13, color:COLORS.textFaint}}>Nenhuma medida ainda.</div>
+                  : [...measurements].sort((a,b)=>b.date.localeCompare(a.date)).map(m => (
+                    <div key={m.id} style={{marginBottom:10, paddingBottom:8, borderBottom:`1px solid ${COLORS.borderSoft}`}}>
+                      <div className="row" style={{justifyContent:'space-between'}}>
+                        <span style={{fontSize:12, color:COLORS.textDim, fontWeight:600}}>{fmtShortPT(m.date)}</span>
+                        <button className="op-icon-btn" style={{padding:3}} onClick={()=>handleDeleteMeasurement(m.id)}>×</button>
+                      </div>
+                      <div className="row" style={{gap:10, flexWrap:'wrap', marginTop:4}}>
+                        {m.cintura!=null && <span className="op-mono" style={{fontSize:11.5}}>👕 {m.cintura}cm</span>}
+                        {m.peito!=null && <span className="op-mono" style={{fontSize:11.5}}>💪 {m.peito}cm</span>}
+                        {m.braco!=null && <span className="op-mono" style={{fontSize:11.5}}>🦾 {m.braco}cm</span>}
+                        {m.quadril!=null && <span className="op-mono" style={{fontSize:11.5}}>📐 {m.quadril}cm</span>}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="op-card" style={{padding:16}}>
+            <div className="row" style={{justifyContent:'space-between', alignItems:'center', marginBottom:8}}>
+              <span className="op-label">Conquistas</span>
+              <span className="op-mono" style={{fontSize:12, color:COLORS.textDim}}>{unlockedBadges.length}/{BADGES.length} · Nv.{level} · {xp}xp</span>
+            </div>
+            <div className="op-track" style={{marginBottom:12}}>
+              <div className="op-track-fill" style={{width:`${xpInLevel}%`, background:COLORS.accent}} />
+            </div>
+            <div className="row" style={{flexWrap:'wrap', gap:12}}>
+              {BADGES.map(b => {
+                const unlocked = unlockedBadges.some(u=>u.id===b.id);
+                return (
+                  <div key={b.id} style={{textAlign:'center', opacity:unlocked?1:0.22, transition:'opacity .3s', width:70}}>
+                    <div style={{fontSize:26}}>{b.emoji}</div>
+                    <div style={{fontSize:10, color:unlocked?COLORS.text:COLORS.textFaint, marginTop:3, lineHeight:1.3}}>{b.label}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
+
       {tab==='coach' && (
         <div className="op-card" style={{padding:16}}>
           <span className="op-label">Analista de progresso (IA)</span>
           <div style={{fontSize:12.5, color:COLORS.textFaint, margin:'8px 0 10px'}}>Junta peso, comida, treino e rotina num diagnóstico direto.</div>
-          <div className="row gap2 wrap">
-            <input type="text" className="op-input" style={{flex:1, minWidth:180}} placeholder="Pergunta específica (opcional)" value={coachQuestion} onChange={e=>setCoachQuestion(e.target.value)} onKeyDown={e=>e.key==='Enter'&&!coachLoading&&askCoach(coachQuestion)} />
-            <button className="op-btn" onClick={()=>askCoach(coachQuestion)} disabled={coachLoading}>{coachLoading?'Analisando…':'Pedir análise'}</button>
+          <div className="row gap2 wrap" style={{marginBottom:8}}>
+            <button className="op-btn" style={{flex:1}} onClick={()=>askCoach(coachQuestion)} disabled={coachLoading}>{coachLoading?'Analisando…':'Pedir análise'}</button>
+            <button className="op-btn-2" onClick={handleWeeklyReport} disabled={coachLoading}>📊 Relatório semanal</button>
           </div>
+          <input type="text" className="op-input" style={{width:'100%'}} placeholder="Pergunta específica (opcional)" value={coachQuestion} onChange={e=>setCoachQuestion(e.target.value)} onKeyDown={e=>e.key==='Enter'&&!coachLoading&&askCoach(coachQuestion)} />
           {coachError && <div style={{fontSize:12, color:COLORS.warn, marginTop:10}}>{coachError}</div>}
           {coachMessage && !coachLoading && (
             <div className="op-card2" style={{padding:14, marginTop:12, whiteSpace:'pre-wrap', fontSize:13.5, lineHeight:1.55}}>
