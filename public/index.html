@@ -12,7 +12,7 @@
   * { box-sizing: border-box; }
   html, body { margin:0; padding:0; background:#15171A; }
   body { font-family:'Inter',system-ui,sans-serif; }
-  #root { max-width: 720px; margin: 0 auto; padding: 12px; }
+  #root { max-width: 720px; margin: 0 auto; padding: 16px; }
   ::-webkit-scrollbar { width:6px; height:6px; }
   ::-webkit-scrollbar-thumb { background:#2E333B; border-radius:4px; }
 </style>
@@ -193,23 +193,58 @@ function saveState(state) {
   catch (e) { return false; }
 }
 
-function useSpeechRecognition({ onResult }) {
+function useSpeechRecognition({ onInterim, onFinal }) {
   const recRef = useRef(null);
   const [listening, setListening] = useState(false);
-  const cbRef = useRef(onResult);
-  useEffect(() => { cbRef.current = onResult; });
+  const finalRef = useRef('');
+  const onIntRef = useRef(onInterim);
+  const onFinRef = useRef(onFinal);
+  useEffect(() => { onIntRef.current = onInterim; onFinRef.current = onFinal; });
+
   function start() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { alert('Reconhecimento de voz não suportado. Use Chrome ou Edge.'); return; }
+    if (!SR) { alert('Use Chrome ou Edge para reconhecimento de voz.'); return; }
     const rec = new SR();
-    rec.lang = 'pt-BR'; rec.continuous = false; rec.interimResults = false;
-    rec.onresult = e => { cbRef.current(e.results[0][0].transcript); setListening(false); };
-    rec.onend = () => setListening(false);
-    rec.onerror = () => setListening(false);
+    rec.lang = 'pt-BR'; rec.continuous = true; rec.interimResults = true;
+    finalRef.current = '';
+    rec.onresult = e => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) finalRef.current += e.results[i][0].transcript + ' ';
+        else interim += e.results[i][0].transcript;
+      }
+      if (onIntRef.current) onIntRef.current((finalRef.current + interim).trim());
+    };
+    rec.onend = () => {
+      setListening(false);
+      const t = finalRef.current.trim();
+      if (t && onFinRef.current) onFinRef.current(t);
+    };
+    rec.onerror = e => { if (e.error !== 'no-speech') { setListening(false); } };
     rec.start(); recRef.current = rec; setListening(true);
   }
-  function stop() { if (recRef.current) recRef.current.stop(); setListening(false); }
+
+  function stop() { if (recRef.current) recRef.current.stop(); }
   return { listening, start, stop };
+}
+
+function MicIcon({size=18,color='currentColor'}) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}>
+    <rect x="9" y="2" width="6" height="12" rx="3"/>
+    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+    <line x1="12" y1="19" x2="12" y2="22"/>
+    <line x1="8" y1="22" x2="16" y2="22"/>
+  </svg>;
+}
+function StopIcon({size=18,color='currentColor'}) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill={color} style={{display:'block'}}>
+    <rect x="5" y="5" width="14" height="14" rx="2.5"/>
+  </svg>;
+}
+function StarIcon({size=16,color='currentColor',filled=false}) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill={filled?color:'none'} stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{display:'block'}}>
+    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+  </svg>;
 }
 
 function Operacao90() {
@@ -377,25 +412,29 @@ function Operacao90() {
   }), [entries, meals, workoutLogs, waterByDate, stats, weightStreak, streak, voiceMealUsed]);
   function updateWater(date, delta) { setWaterByDate(prev => ({...prev, [date]: Math.max(0,(prev[date]||0)+delta)})); }
 
-  const mealVoice = useSpeechRecognition({ onResult: async (transcript) => {
-    setFoodDesc(transcript);
-    setVoiceMealUsed(true);
-    setEstimating(true); setEstimateError('');
-    try {
-      const sys = 'Você estima valores nutricionais de alimentos em português do Brasil. Responda APENAS JSON válido, sem markdown: {"calorias":NUMERO,"proteina":NUMERO,"carboidrato":NUMERO,"gordura":NUMERO}. Valores em kcal e gramas.';
-      const text = await callClaude({ system: sys, content: transcript, maxTokens: 200 });
-      const parsed = JSON.parse(text.replace(/```json|```/g,'').trim());
-      setFoodCal(String(Math.round(parsed.calorias||0)));
-      setFoodProt(String(Math.round(parsed.proteina||0)));
-      setFoodCarb(String(Math.round(parsed.carboidrato||0)));
-      setFoodFat(String(Math.round(parsed.gordura||0)));
-    } catch(e) { setEstimateError('Não consegui estimar. Confira os campos.'); }
-    finally { setEstimating(false); }
-  }});
+  const mealVoice = useSpeechRecognition({
+    onInterim: (text) => setFoodDesc(text),
+    onFinal: async (transcript) => {
+      setFoodDesc(transcript);
+      setVoiceMealUsed(true);
+      setEstimating(true); setEstimateError('');
+      try {
+        const sys = 'Você estima valores nutricionais de alimentos em português do Brasil. Responda APENAS JSON válido, sem markdown: {"calorias":NUMERO,"proteina":NUMERO,"carboidrato":NUMERO,"gordura":NUMERO}. Valores em kcal e gramas.';
+        const text = await callClaude({ system: sys, content: transcript, maxTokens: 200 });
+        const parsed = JSON.parse(text.replace(/```json|```/g,'').trim());
+        setFoodCal(String(Math.round(parsed.calorias||0)));
+        setFoodProt(String(Math.round(parsed.proteina||0)));
+        setFoodCarb(String(Math.round(parsed.carboidrato||0)));
+        setFoodFat(String(Math.round(parsed.gordura||0)));
+      } catch(e) { setEstimateError('Não consegui estimar. Confira os campos.'); }
+      finally { setEstimating(false); }
+    },
+  });
 
-  const workoutVoice = useSpeechRecognition({ onResult: (transcript) => {
-    setWoNota(transcript);
-  }});
+  const workoutVoice = useSpeechRecognition({
+    onInterim: (text) => setWoNota(text),
+    onFinal: (transcript) => setWoNota(transcript),
+  });
 
   function handleAddMeasurement() {
     const item = { id:`${measDate}-${Date.now()}`, date:measDate,
@@ -539,13 +578,13 @@ function Operacao90() {
   return (
     <div className="op-root">
       <style>{`
-        .op-root { background:${COLORS.bg}; color:${COLORS.text}; font-family:'Inter',system-ui,sans-serif; border-radius:16px; padding: 16px; }
+        .op-root { background:${COLORS.bg}; color:${COLORS.text}; font-family:'Inter',system-ui,sans-serif; border-radius:16px; padding: 20px; }
         .op-display { font-family:'Oswald',sans-serif; letter-spacing: 0.02em; }
         .op-mono { font-family:'IBM Plex Mono',monospace; }
         .op-label { font-size:12px; letter-spacing:0.1em; color:${COLORS.textDim}; text-transform:uppercase; font-family:'Oswald',sans-serif; }
         .op-card { background:${COLORS.surface}; border:1px solid ${COLORS.border}; border-radius:12px; }
         .op-card2 { background:${COLORS.surface2}; border:1px solid ${COLORS.borderSoft}; border-radius:10px; }
-        .op-input, .op-select { background:${COLORS.surface2}; border:1px solid ${COLORS.border}; color:${COLORS.text}; border-radius:8px; padding:8px 10px; font-size:14px; outline:none; width:100%; }
+        .op-input, .op-select { background:${COLORS.surface2}; border:1px solid ${COLORS.border}; color:${COLORS.text}; border-radius:8px; padding:10px 12px; font-size:14px; outline:none; width:100%; min-height:42px; }
         .op-input:focus, .op-select:focus { border-color:${COLORS.accent}; }
         .op-btn { background:${COLORS.accent}; color:#1A1100; font-weight:600; border-radius:8px; padding:9px 16px; font-size:14px; border:none; cursor:pointer; white-space:nowrap; }
         .op-btn:disabled { opacity:0.5; cursor:not-allowed; }
@@ -559,13 +598,13 @@ function Operacao90() {
         .op-tab.active { background:${COLORS.surface}; border-color:${COLORS.border}; color:${COLORS.text}; }
         .row { display:flex; }
         .col { display:flex; flex-direction:column; }
-        .gap2 { gap:8px; } .gap3 { gap:12px; } .wrap { flex-wrap:wrap; }
-        .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-        .grid4 { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
+        .gap2 { gap:10px; } .gap3 { gap:16px; } .wrap { flex-wrap:wrap; }
+        .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+        .grid4 { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
         @media(min-width:560px){ .grid4{ grid-template-columns:repeat(4,1fr);} }
       `}</style>
 
-      <div className="row wrap gap3" style={{justifyContent:'space-between', alignItems:'flex-start', marginBottom:16}}>
+      <div className="row wrap gap3" style={{justifyContent:'space-between', alignItems:'flex-start', marginBottom:20}}>
         <div>
           <div className="op-label">Operação</div>
           <h1 className="op-display" style={{fontSize:26, fontWeight:700, margin:'2px 0'}}>{fmtKg(profile.startWeight,0)} → {fmtKg(profile.goalWeight,0)} kg</h1>
@@ -588,7 +627,7 @@ function Operacao90() {
 
       {saveError && <div style={{fontSize:12, color:COLORS.warn, marginBottom:10}}>{saveError}</div>}
 
-      <div className="op-card" style={{padding:14, marginBottom:16}}>
+      <div className="op-card" style={{padding:14, marginBottom:20}}>
         <div className="row" style={{justifyContent:'space-between', cursor:'pointer'}} onClick={()=>!editingRoutine && setRoutineOpen(!routineOpen)}>
           <div className="op-label">Seu perfil de rotina <span style={{fontSize:11, color:COLORS.textFaint, textTransform:'none'}}>· usado pela IA</span></div>
           <span style={{fontSize:12, color:COLORS.textDim}}>{routineOpen ? 'recolher' : 'ver / editar'}</span>
@@ -625,7 +664,7 @@ function Operacao90() {
             <StatCard label="Ritmo necessário" value={stats.goalReached ? '—' : `${fmtKg(stats.requiredWeeklyPace,2)} kg/sem`} />
           </div>
 
-          <div className="op-card" style={{padding:16, marginBottom:16}}>
+          <div className="op-card" style={{padding:16, marginBottom:20}}>
             <div className="row" style={{justifyContent:'space-between', marginBottom:10}}>
               <span className="op-label">Pacing</span>
               <span className="op-mono" style={{fontSize:12, color:COLORS.textDim}}>ritmo atual: {stats.currentPace===null?'coletando dados':`${fmtKg(stats.currentPace,2)} kg/sem`}</span>
@@ -639,7 +678,7 @@ function Operacao90() {
             )}
           </div>
 
-          <div className="op-card" style={{padding:16, marginBottom:16}}>
+          <div className="op-card" style={{padding:16, marginBottom:20}}>
             <span className="op-label">Trajetória</span>
             <WeightChart chartData={chartData} profile={profile} yDomain={yDomain} />
           </div>
@@ -677,7 +716,7 @@ function Operacao90() {
 
       {tab==='comida' && (
         <>
-          <div className="op-card" style={{padding:16, marginBottom:16}}>
+          <div className="op-card" style={{padding:16, marginBottom:20}}>
             <span className="op-label">Meta nutricional estimada</span>
             <div className="grid4" style={{marginTop:10}}>
               <StatCard label="Calorias/dia" value={`${fmtNum(nutrition.target)} kcal`} />
@@ -694,7 +733,7 @@ function Operacao90() {
             </div>
           </div>
 
-          <div className="op-card" style={{padding:16, marginBottom:16}}>
+          <div className="op-card" style={{padding:16, marginBottom:20}}>
             <span className="op-label">Cardápio sugerido (IA)</span>
             <div className="row gap2 wrap" style={{marginTop:10}}>
               <input type="text" className="op-input" style={{flex:1, minWidth:180}} placeholder="preferências (opcional)" value={planContext} onChange={e=>setPlanContext(e.target.value)} />
@@ -704,7 +743,7 @@ function Operacao90() {
             {mealPlan && !planLoading && <div className="op-card2" style={{padding:14, marginTop:10, whiteSpace:'pre-wrap', fontSize:13.5, lineHeight:1.5}}>{mealPlan.text}</div>}
           </div>
 
-          <div className="op-card" style={{padding:16, marginBottom:16}}>
+          <div className="op-card" style={{padding:16, marginBottom:20}}>
             <div className="row" style={{justifyContent:'space-between', alignItems:'center'}}>
               <span className="op-label">Água</span>
               <input type="date" className="op-input op-mono" style={{width:130, fontSize:12}} value={foodDate} max={localISODate()} onChange={e=>setFoodDate(e.target.value)} />
@@ -734,13 +773,13 @@ function Operacao90() {
                 </div>
                 <div className="row gap2">
                   <input type="text" className="op-input" style={{flex:1}} placeholder="ex: arroz, feijão, frango grelhado" value={foodDesc} onChange={e=>setFoodDesc(e.target.value)} />
-                  <button className={mealVoice.listening?'op-btn':'op-btn-2'} style={{padding:'8px 12px', fontSize:18, flexShrink:0}} onClick={mealVoice.listening?mealVoice.stop:mealVoice.start} title="Narrar por voz">{mealVoice.listening?'⏹':'🎤'}</button>
+                  <button className={mealVoice.listening?'op-btn':'op-btn-2'} style={{padding:'9px 12px', flexShrink:0, display:'flex', alignItems:'center', gap:6}} onClick={mealVoice.listening?mealVoice.stop:mealVoice.start} title="Narrar por voz">{mealVoice.listening ? <><StopIcon size={16} color='#1A1100'/><span style={{fontSize:12,fontWeight:600}}>Parar</span></> : <><MicIcon size={16}/><span style={{fontSize:12}}>Voz</span></>}</button>
                 </div>
-                {mealVoice.listening && <div style={{fontSize:12, color:COLORS.accent, marginTop:2}}>🔴 Ouvindo… fale o que comeu</div>}
+                {mealVoice.listening && <div style={{fontSize:12, color:COLORS.accent, marginTop:4, display:'flex', alignItems:'center', gap:6}}><span style={{width:8,height:8,borderRadius:'50%',background:COLORS.accent,display:'inline-block',animation:'pulse 1s infinite'}}/>Ouvindo — fale devagar e clique Parar quando terminar</div>}
                 {estimating && <div style={{fontSize:12, color:COLORS.textDim}}>Estimando calorias…</div>}
                 <div className="row gap2">
                   <button className="op-btn-2" style={{flex:1}} onClick={handleEstimate} disabled={estimating||!foodDesc.trim()}>{estimating?'Estimando…':'Estimar com IA'}</button>
-                  <button className="op-btn-2" style={{padding:'8px 12px'}} onClick={handleSaveFavorite} disabled={!foodDesc.trim()||!foodCal} title="Salvar como favorito">⭐</button>
+                  <button className="op-btn-2" style={{padding:'9px 12px', display:'flex', alignItems:'center', gap:5}} onClick={handleSaveFavorite} disabled={!foodDesc.trim()||!foodCal} title="Salvar como favorito"><StarIcon size={15} color={COLORS.accent}/><span style={{fontSize:12}}>Salvar</span></button>
                 </div>
                 {estimateError && <div style={{fontSize:12, color:COLORS.warn}}>{estimateError}</div>}
                 <div className="grid4">
@@ -820,7 +859,7 @@ function Operacao90() {
             <StatCard label="Seq. peso" value={`${weightStreak}d`} />
             <StatCard label="Peso atual" value={`${fmtKg(stats.latestWeight)} kg`} />
           </div>
-          <div className="op-card" style={{padding:16, marginBottom:16}}>
+          <div className="op-card" style={{padding:16, marginBottom:20}}>
             <span className="op-label">Plano semanal</span>
             <div className="col gap2" style={{marginTop:10}}>
               {WEEKDAYS.map(d => (
@@ -853,9 +892,9 @@ function Operacao90() {
                 </select>
                 <div className="row gap2">
                   <input type="text" className="op-input" style={{flex:1}} placeholder="ex: supino 4x12 80kg" value={woNota} onChange={e=>setWoNota(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleAddWorkout()} />
-                  <button className={workoutVoice.listening?'op-btn':'op-btn-2'} style={{padding:'8px 12px', fontSize:18, flexShrink:0}} onClick={workoutVoice.listening?workoutVoice.stop:workoutVoice.start} title="Narrar treino por voz">{workoutVoice.listening?'⏹':'🎤'}</button>
+                  <button className={workoutVoice.listening?'op-btn':'op-btn-2'} style={{padding:'9px 12px', flexShrink:0, display:'flex', alignItems:'center', gap:6}} onClick={workoutVoice.listening?workoutVoice.stop:workoutVoice.start} title="Narrar treino por voz">{workoutVoice.listening ? <><StopIcon size={16} color='#1A1100'/><span style={{fontSize:12,fontWeight:600}}>Parar</span></> : <><MicIcon size={16}/><span style={{fontSize:12}}>Voz</span></>}</button>
                 </div>
-                {workoutVoice.listening && <div style={{fontSize:12, color:COLORS.accent, marginTop:2}}>🔴 Ouvindo… descreva seu treino</div>}
+                {workoutVoice.listening && <div style={{fontSize:12, color:COLORS.accent, marginTop:4, display:'flex', alignItems:'center', gap:6}}><span style={{width:8,height:8,borderRadius:'50%',background:COLORS.accent,display:'inline-block'}}/>Ouvindo — descreva o treino e clique Parar</div>}
                 <button className="op-btn" onClick={handleAddWorkout}>+ Salvar treino</button>
               </div>
             </div>
@@ -1008,7 +1047,7 @@ function Operacao90() {
 
 function StatCard({ label, value }) {
   return (
-    <div className="op-card" style={{padding:'12px 14px'}}>
+    <div className="op-card" style={{padding:'14px 16px'}}>
       <div style={{fontSize:11, color:COLORS.textDim, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6}}>{label}</div>
       <div className="op-mono" style={{fontSize:17, fontWeight:600}}>{value}</div>
     </div>
