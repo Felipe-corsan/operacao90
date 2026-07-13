@@ -267,6 +267,8 @@ function Operacao90() {
   const firstLoad = useRef(true);
 
   const [newWeight, setNewWeight] = useState('');
+  const [savedWeight, setSavedWeight] = useState(false);
+  const [savedMeal, setSavedMeal] = useState(false);
   const [newNote, setNewNote] = useState('');
   const [newDate, setNewDate] = useState(localISODate());
 
@@ -469,6 +471,7 @@ function Operacao90() {
     if (!w || w<=0 || w>400) return;
     setEntries([...entries.filter(e=>e.date!==newDate), { id:`${newDate}-${Date.now()}`, date:newDate, weight:w, note:newNote.trim() }]);
     setNewWeight(''); setNewNote('');
+    setSavedWeight(true); setTimeout(()=>setSavedWeight(false), 1800);
   }
   function handleDeleteEntry(id) { setEntries(entries.filter(e=>e.id!==id)); }
 
@@ -585,17 +588,25 @@ function Operacao90() {
         .op-card { background:${COLORS.surface}; border:1px solid ${COLORS.border}; border-radius:12px; }
         .op-card2 { background:${COLORS.surface2}; border:1px solid ${COLORS.borderSoft}; border-radius:10px; }
         .op-input, .op-select { background:${COLORS.surface2}; border:1px solid ${COLORS.border}; color:${COLORS.text}; border-radius:8px; padding:10px 12px; font-size:14px; outline:none; width:100%; min-height:42px; }
-        .op-input:focus, .op-select:focus { border-color:${COLORS.accent}; }
-        .op-btn { background:${COLORS.accent}; color:#1A1100; font-weight:600; border-radius:8px; padding:9px 16px; font-size:14px; border:none; cursor:pointer; white-space:nowrap; }
+        .op-input:focus, .op-select:focus { border-color:${COLORS.accent}; box-shadow:0 0 0 3px rgba(232,118,44,0.14); }
+        .op-btn { background:${COLORS.accent}; color:#1A1100; font-weight:600; border-radius:8px; padding:9px 16px; font-size:14px; border:none; cursor:pointer; white-space:nowrap; transition:background .15s ease, transform .1s ease, opacity .15s ease; }
+        .op-btn:hover:not(:disabled) { background:#F28A44; }
+        .op-btn:active:not(:disabled) { transform:scale(0.97); }
         .op-btn:disabled { opacity:0.5; cursor:not-allowed; }
-        .op-btn-2 { background:${COLORS.surface2}; color:${COLORS.text}; font-weight:500; border:1px solid ${COLORS.border}; border-radius:8px; padding:9px 16px; font-size:13.5px; cursor:pointer; white-space:nowrap; }
+        .op-btn-2 { background:${COLORS.surface2}; color:${COLORS.text}; font-weight:500; border:1px solid ${COLORS.border}; border-radius:8px; padding:9px 16px; font-size:13.5px; cursor:pointer; white-space:nowrap; transition:background .15s ease, border-color .15s ease, transform .1s ease; }
+        .op-btn-2:hover:not(:disabled) { border-color:#3A404A; background:#20252C; }
+        .op-btn-2:active:not(:disabled) { transform:scale(0.97); }
         .op-btn-2:disabled { opacity:0.5; cursor:not-allowed; }
-        .op-btn-ghost { background:transparent; color:${COLORS.textDim}; border:1px solid ${COLORS.border}; border-radius:8px; padding:8px 14px; font-size:13px; cursor:pointer; }
-        .op-icon-btn { background:transparent; border:1px solid ${COLORS.border}; border-radius:8px; padding:7px; color:${COLORS.textDim}; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+        .op-btn-ghost { background:transparent; color:${COLORS.textDim}; border:1px solid ${COLORS.border}; border-radius:8px; padding:8px 14px; font-size:13px; cursor:pointer; transition:border-color .15s ease, color .15s ease; }
+        .op-btn-ghost:hover { color:${COLORS.text}; border-color:#3A404A; }
+        .op-icon-btn { background:transparent; border:none; border-radius:8px; padding:7px; color:${COLORS.textDim}; cursor:pointer; display:flex; align-items:center; justify-content:center; min-width:32px; min-height:32px; transition:color .15s ease; }
+        .op-icon-btn:hover { color:${COLORS.text}; }
         .op-track { height:8px; border-radius:5px; background:${COLORS.surface2}; overflow:hidden; position:relative; }
         .op-track-fill { height:100%; border-radius:5px; transition:width .4s ease; }
-        .op-tab { padding:8px 13px; border-radius:9px; font-size:13.5px; font-weight:500; color:${COLORS.textDim}; border:1px solid transparent; cursor:pointer; white-space:nowrap; background:none; }
-        .op-tab.active { background:${COLORS.surface}; border-color:${COLORS.border}; color:${COLORS.text}; }
+        .op-tab { padding:10px 14px; border-radius:9px; font-size:13.5px; font-weight:500; color:${COLORS.textDim}; border:1px solid transparent; cursor:pointer; white-space:nowrap; background:none; position:relative; transition:color .15s ease; }
+        .op-tab:hover { color:${COLORS.text}; }
+        .op-tab.active { background:${COLORS.surface}; border-color:${COLORS.border}; color:#ECEAE6; }
+        .op-tab.active::after { content:''; position:absolute; left:12px; right:12px; bottom:-1px; height:2px; background:${COLORS.accent}; border-radius:2px; }
         .row { display:flex; }
         .col { display:flex; flex-direction:column; }
         .gap2 { gap:10px; } .gap3 { gap:16px; } .wrap { flex-wrap:wrap; }
@@ -651,7 +662,7 @@ function Operacao90() {
         )}
       </div>
 
-      <div className="row gap2" style={{marginBottom:16, overflowX:'auto'}}>
+      <div className="row gap2" style={{marginBottom:16, overflowX:'auto', paddingBottom:2}}>
         {TABS.map(t => <button key={t.id} className={`op-tab ${tab===t.id?'active':''}`} onClick={()=>setTab(t.id)}>{t.label}</button>)}
       </div>
 
@@ -691,7 +702,7 @@ function Operacao90() {
                 <input type="text" inputMode="decimal" className="op-input op-mono" placeholder="kg" style={{maxWidth:90}} value={newWeight} onChange={e=>setNewWeight(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleAddEntry()} />
               </div>
               <input type="text" className="op-input" placeholder="nota (opcional)" value={newNote} onChange={e=>setNewNote(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleAddEntry()} />
-              <button className="op-btn" onClick={handleAddEntry}>+ Salvar registro</button>
+              <button className="op-btn" disabled={!newWeight.trim()} onClick={handleAddEntry} style={{background:savedWeight?COLORS.good:undefined, color:savedWeight?'#fff':undefined}}>{savedWeight ? '✓ Salvo' : '+ Salvar registro'}</button>
             </div>
           </div>
 
@@ -787,7 +798,7 @@ function Operacao90() {
                   <input type="text" inputMode="decimal" className="op-input op-mono" placeholder="carb" value={foodCarb} onChange={e=>setFoodCarb(e.target.value)} />
                   <input type="text" inputMode="decimal" className="op-input op-mono" placeholder="gord" value={foodFat} onChange={e=>setFoodFat(e.target.value)} />
                 </div>
-                <button className="op-btn" onClick={handleAddMeal}>+ Salvar refeição</button>
+                <button className="op-btn" disabled={!foodDesc.trim() || !foodCal} onClick={handleAddMeal} style={{background:savedMeal?COLORS.good:undefined, color:savedMeal?'#fff':undefined}}>{savedMeal ? '✓ Refeição salva' : '+ Salvar refeição'}</button>
                 {favoriteMeals.length > 0 && (
                   <div>
                     <button className="op-btn-ghost" style={{width:'100%', fontSize:12, marginTop:4}} onClick={()=>setShowFavorites(!showFavorites)}>
@@ -1046,8 +1057,8 @@ function Operacao90() {
 function StatCard({ label, value }) {
   return (
     <div className="op-card" style={{padding:'14px 16px'}}>
-      <div style={{fontSize:11, color:COLORS.textDim, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:6}}>{label}</div>
-      <div className="op-mono" style={{fontSize:17, fontWeight:600}}>{value}</div>
+      <div className="op-label" style={{fontSize:10, marginBottom:6, display:'block'}}>{label}</div>
+      <div className="op-mono" style={{fontSize:20, fontWeight:600, lineHeight:1.2}}>{value}</div>
     </div>
   );
 }
